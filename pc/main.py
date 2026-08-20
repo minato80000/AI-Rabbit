@@ -298,6 +298,12 @@ async def text_mode(cfg: dict, text: str) -> None:
         await rabbit.aclose()
 
 
+async def check_mic_mode(cfg: dict, seconds: float, wav: Path | None) -> None:
+    from .diagnose import check_mic
+
+    await check_mic(cfg, seconds, wav)
+
+
 async def run_mode(cfg: dict) -> None:
     rabbit = Rabbit(cfg)
     try:
@@ -314,6 +320,12 @@ def main() -> int:
     ap.add_argument("--text", help="マイクを使わずこのテキストで応答を試す")
     ap.add_argument("--list-devices", action="store_true")
     ap.add_argument("--list-speakers", action="store_true")
+    ap.add_argument("--check-mic", action="store_true",
+                    help="マイクを録音して、音量・VAD・モデル別の認識結果を診断する")
+    ap.add_argument("--seconds", type=float, default=6.0,
+                    help="--check-mic の録音秒数")
+    ap.add_argument("--wav", type=Path,
+                    help="録音済み WAV を解析する（--check-mic と併用。録り直し不要）")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -323,6 +335,7 @@ def main() -> int:
         datefmt="%H:%M:%S",
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
 
     if args.list_devices:
         list_devices()
@@ -330,7 +343,9 @@ def main() -> int:
 
     cfg = load_config(args.config)
     try:
-        if args.list_speakers:
+        if args.check_mic or args.wav:
+            asyncio.run(check_mic_mode(cfg, args.seconds, args.wav))
+        elif args.list_speakers:
             asyncio.run(list_speakers(cfg))
         elif args.text:
             asyncio.run(text_mode(cfg, args.text))

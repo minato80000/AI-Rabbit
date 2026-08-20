@@ -50,8 +50,11 @@ class Whisper:
         compute_type: str = "int8_float16",
         language: str = "ja",
         initial_prompt: str | None = None,
+        beam_size: int = 1,
     ) -> None:
         self.language = language
+        # 1 は貪欲法で最速。GPU なら 5 にしても余裕があり、精度が上がる
+        self.beam_size = beam_size
         # 固有名詞を先に見せておくと綴りが安定する。
         # これがないと「ウサちゃん」が「おさちゃん」になり、名前を呼んでも反応しない。
         self.initial_prompt = initial_prompt
@@ -86,7 +89,7 @@ class Whisper:
         segments, _ = self.model.transcribe(
             audio,
             language=self.language,
-            beam_size=1,          # 対話用途では貪欲法で十分。速度優先
+            beam_size=self.beam_size,
             vad_filter=False,     # 区間切り出しは Silero VAD 側で済んでいる
             condition_on_previous_text=False,  # 前文脈の引きずりによる幻聴を防ぐ
             initial_prompt=self.initial_prompt,

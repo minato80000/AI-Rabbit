@@ -25,7 +25,7 @@ vad:
   max_utterance_sec: 15     # 保険。これを超えたら強制的に切る
 
 stt:
-  model: "base"             # tiny / base / small / medium
+  model: "small"            # 実マイクでは base だと崩れる。medium は3倍遅い割に精度が上がらない
   device: "cuda"            # 実測 976ms(cpu) -> 114ms(gpu)。失敗時は自動で cpu に落ちる
   compute_type: "int8_float16"   # cpu に落ちた場合は int8 が使われる
   language: "ja"
@@ -33,6 +33,8 @@ stt:
   # 実測では null + wake.fuzzy_distance=1 が最良（取りこぼし 0/5・誤反応 0/10）だった。
   # 詳細は docs/dialogue-system.md の「ウェイクワード」節。
   initial_prompt: null
+  # 1=貪欲法(最速) / 5=ビームサーチ(高精度)。GPU なら 5 でも余裕がある
+  beam_size: 5
 
 llm:
   backend: "ollama"         # ollama / claude
