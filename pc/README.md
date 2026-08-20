@@ -97,10 +97,11 @@ copy pc\persona\usachan.local.md.example pc\persona\usachan.local.md
 | `tts.speed` | 話速。1.1〜1.2 くらいがロボットらしい |
 | `llm.model` | Ollama のモデル名。**非推論モデルであること** |
 | `llm.num_ctx` | 小さいほど VRAM に載る。4GB では 2048 が実測で最速 |
-| `stt.model` | `tiny` / `base` / `small`。精度が足りなければ上げる |
-| `stt.device` | `cuda` 推奨（実測 976ms→114ms）。失敗時は自動で `cpu` に落ちる |
+| `stt.model` | `medium` 推奨（実マイクで検証済み）。`small` は速いが精度が落ちる |
+| `stt.device` | `cuda` 必須級。`cpu` だと medium は数秒かかる。失敗時は自動で落ちる |
 | `stt.initial_prompt` | `null` 推奨。固有名詞を足すと誤反応が増える（実測済み） |
 | `wake.fuzzy_distance` | 認識のゆれを許す編集距離。`1` で取りこぼし・誤反応ともゼロ |
+| `stt.beam_size` | `1` でよい。medium では `5` にしても結果が変わらなかった |
 | `vad.threshold` | 上げると誤検出が減り、下げると小声を拾う |
 
 ## トラブル
@@ -165,7 +166,7 @@ whisper が「ウサちゃん」を「おさちゃん」と綴ることがあり
 | 音量が小さい | Windows のマイク音量を上げる。マイクに近づく |
 | VAD が0本 | `vad.threshold` を 0.3 程度まで下げる |
 | 語尾が切れる | `vad.hangover_ms` を 600 程度まで上げる |
-| 認識が不正確 | `stt.model` を `small` / `medium` に上げる。`stt.beam_size` を 5 に |
+| 認識が不正確 | `stt.model` を上げる（`medium` が既定。さらに上は `large-v3`） |
 
 ### Windows 側で確認すること
 
@@ -179,8 +180,9 @@ Windows のマイク処理が認識精度を落としていることがありま
 マイク配列（ビームフォーミング）を積んだノート PC では、正面から
 30cm 程度の距離で話すのが最も安定します。
 
-`stt.model` を大きくすると精度は上がりますが遅くなります。GPU が使えていれば
-`small` でも十分速いはずなので、まず `small` を試してください。
+既定は `medium` です。実マイクでの実測では base が明確に崩れ、small は
+惜しいところまで、medium が完璧でした。GPU なら 413ms で済み、VRAM も
+LLM と合わせて 3616/4096 MiB に収まります。
 
 ## 構成
 
