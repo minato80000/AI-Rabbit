@@ -1,0 +1,83 @@
+# ============================================================
+#  Python（PC 母艦側）
+# ============================================================
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+
+# 各種キャッシュ
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# ============================================================
+#  機械学習モデル・キャッシュ
+# ============================================================
+# faster-whisper / huggingface のモデルは通常 ~/.cache に落ちるが、
+# 明示的にプロジェクト配下へ置いた場合に備えて除外しておく。
+# Ollama のモデルも Ollama 側の管理領域にあり、リポジトリには入らない。
+models/
+*.bin
+*.onnx
+*.gguf
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+
+# ============================================================
+#  実行時に生まれるもの
+# ============================================================
+# デバッグ用の録音・合成結果の書き出し先
+recordings/
+*.log
+
+# ローカル環境ごとの設定上書き（--config で読ませる想定）
+config.local.yaml
+pc/config.local.yaml
+
+# 公開したくないペルソナ。原作のセリフをそのまま貼る場合はこちらへ置き、
+# config.local.yaml の persona.file で差し替える（リポジトリには入らない）
+pc/persona/*.local.md
+
+# 秘密情報。ANTHROPIC_API_KEY をファイルに置く場合はここ
+.env
+.env.*
+!.env.example
+secrets.yaml
+
+# ============================================================
+#  ファームウェア（CoreS3 / PlatformIO） ※Step 3 以降
+# ============================================================
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+firmware/.pio/
+firmware/lib/readme.txt
+
+# ============================================================
+#  エディタ / OS
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
