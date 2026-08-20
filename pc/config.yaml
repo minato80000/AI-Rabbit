@@ -46,7 +46,12 @@ tts:
   intonation: 1.0
 
 persona:
+  # 公開用のベース。原作の文章は書かないこと
   file: "persona/usachan.md"
+  # 原作のセリフ例など、公開したくない内容はこちら。
+  # 存在すれば自動で読み込んでベースに追記する。
+  # .gitignore と pre-commit フックの両方で保護されており、リポジトリには入らない。
+  local_file: "persona/usachan.local.md"
 
 behavior:
   # PC のマイクと PC のスピーカーが同じ部屋にあるため、Step 1 では

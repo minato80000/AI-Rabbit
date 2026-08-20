@@ -253,7 +253,9 @@ pc/
   state.py               状態機械 idle/listening/thinking/speaking
   wake.py                ウェイクワード判定・会話モード管理
   persona/
-    usachan.md           ★ペルソナ本体（セリフ例をここに入れる）
+    usachan.md                 公開用ペルソナ（原作の文章は書かない）
+    usachan.local.md           ★原作のセリフ例。非公開・自動読込
+    usachan.local.md.example   上のテンプレート
   audio/
     mic.py               sounddevice 入力・リングバッファ
     vad.py               Silero VAD、発話区間切り出し
@@ -305,11 +307,43 @@ Step 1 の間は PlatformIO も CoreS3 も不要。
 | VOICEVOX 合成・再生 | **未検証**（VOICEVOX 未インストール） |
 | マイク入力・VAD 区間切り出し | **未検証**（実マイクでの確認が必要） |
 
+## 公開リポジトリとしての制約
+
+このリポジトリは public（https://github.com/minato80000/AI-Rabbit）。
+**原作の文章は一切コミットしない構成にしている。**
+
+### ペルソナの2層構造
+
+| ファイル | 公開 | 内容 |
+|---|---|---|
+| `pc/persona/usachan.md` | される | 人格・話し方・応答ルール。自作の説明文のみ |
+| `pc/persona/usachan.local.md` | されない | 原作のセリフ例など著作物にあたるもの |
+| `pc/persona/usachan.local.md.example` | される | 上を作るためのテンプレート（中身は空） |
+
+`load_persona()` がベースを読み、ローカル側が存在すれば追記する。
+存在しなければベースだけで動くので、クローンした人もそのまま起動できる。
+
+### 二重の保護
+
+1. **`.gitignore`** — `*.local.md` をどの階層でも除外
+2. **pre-commit フック**（`tools/hooks/pre-commit`）— `git add -f` で
+   強制ステージしてもコミットを中止する
+
+フックはリポジトリに入れてあり、`git config core.hooksPath tools/hooks` で有効化する
+（`.git/hooks` はクローンで配布されないため、この方式にしている）。
+`*.local.yaml` と `.env` も同じフックで弾く。
+
+### 検証済み
+
+- 通常の `git add -A` では `usachan.local.md` はステージされない
+- `git add -f` した状態で `git commit` すると中止される
+- ローカルファイルの有無で `load_persona()` が正しく切り替わる
+
 ## 未確定・要対応
 
 | 項目 | 状態 |
 |---|---|
-| **原作のセリフ例** | **ユーザーが提供予定。ペルソナの再現度はこれ待ち** |
+| **原作のセリフ例** | **ユーザーが提供予定。`pc/persona/usachan.local.md`（非公開）に置く** |
 | **VOICEVOX インストール** | **未実施。Step 1 の検証がここで止まっている** |
 | VOICEVOX の話者選定 | 未決。原作再現の要なので実際に聴いて選ぶ |
 | LLM モデルの確定 | 完了（`qwen3:4b-instruct`） |

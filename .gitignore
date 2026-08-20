@@ -43,9 +43,16 @@ recordings/
 config.local.yaml
 pc/config.local.yaml
 
-# 公開したくないペルソナ。原作のセリフをそのまま貼る場合はこちらへ置き、
-# config.local.yaml の persona.file で差し替える（リポジトリには入らない）
-pc/persona/*.local.md
+# ------------------------------------------------------------
+#  原作のセリフなど、公開してはいけない素材
+# ------------------------------------------------------------
+# *.local.md は「ローカル専用」の印。どの階層でも除外する。
+# ペルソナ本体は pc/persona/usachan.local.md に置く運用
+# （テンプレートは usachan.local.md.example）。
+# pre-commit フック（tools/hooks/pre-commit）でも二重に防いでいる。
+*.local.md
+private/
+pc/persona/private/
 
 # 秘密情報。ANTHROPIC_API_KEY をファイルに置く場合はここ
 .env

@@ -35,9 +35,8 @@ def load_config(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def load_persona(cfg: dict) -> str:
-    """ペルソナを読む。編集者向けの HTML コメントはプロンプトに含めない。"""
-    text = (ROOT / cfg["persona"]["file"]).read_text(encoding="utf-8")
+def _strip_comments(text: str) -> str:
+    """編集者向けの HTML コメントをプロンプトから除く。"""
     out: list[str] = []
     depth = 0
     i = 0
@@ -53,6 +52,33 @@ def load_persona(cfg: dict) -> str:
                 out.append(text[i])
             i += 1
     return "".join(out).strip()
+
+
+def load_persona(cfg: dict) -> str:
+    """ペルソナを読む。
+
+    公開用のベースファイルに、ローカル専用ファイルがあれば追記する。
+    **原作のセリフなど公開したくない内容はローカル側に置く。**
+    ローカル側は .gitignore と pre-commit フックの両方で保護されており、
+    リポジトリには入らない。存在しなければベースだけで動く。
+    """
+    pcfg = cfg["persona"]
+    base_path = ROOT / pcfg["file"]
+    parts = [_strip_comments(base_path.read_text(encoding="utf-8"))]
+
+    local_name = pcfg.get("local_file")
+    if local_name:
+        local_path = ROOT / local_name
+        if local_path.exists():
+            parts.append(_strip_comments(local_path.read_text(encoding="utf-8")))
+            log.info("ペルソナ: %s + %s（ローカル専用）", base_path.name, local_path.name)
+        else:
+            log.info(
+                "ペルソナ: %s のみ。%s を作るとセリフ例を追加できます（非公開）",
+                base_path.name, local_path.name,
+            )
+
+    return "\n\n".join(p for p in parts if p).strip()
 
 
 class Rabbit:

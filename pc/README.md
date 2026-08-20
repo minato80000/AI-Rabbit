@@ -20,8 +20,14 @@ VOICEVOX は**アプリを起動しておくだけ**で、`localhost:50021` に 
 # リポジトリ直下で
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
-ollama pull qwen2.5:3b
+ollama pull qwen3:4b-instruct
+
+# 非公開ファイルの誤コミットを防ぐフックを有効化（クローン後に一度だけ）
+git config core.hooksPath tools/hooks
 ```
+
+**モデルは非推論版（`-instruct`）を使ってください。** `qwen3:4b`（推論版）は
+思考を止められず、生の推論が返答に混ざります。詳細は `docs/dialogue-system.md`。
 
 ## 起動
 
@@ -50,6 +56,35 @@ ollama pull qwen2.5:3b
 - `ウサちゃん` だけ — 「はい、なんでしょう？」と返して待つ
 - 一度会話が始まったら **20秒間は呼びかけ不要**（`config.yaml` の `conversation_window_sec`）
 
+## ペルソナの調整
+
+口調の調整はペルソナファイルだけを編集します。コードは触りません。
+**このリポジトリは public なので、ペルソナは2層に分かれています。**
+
+| ファイル | 公開 | 内容 |
+|---|---|---|
+| `persona/usachan.md` | **公開される** | 人格・話し方・応答ルール。自分で書いた説明文だけ |
+| `persona/usachan.local.md` | **公開されない** | 原作のセリフ例など、著作物にあたるもの |
+
+原作のセリフは著作物なので、公開リポジトリには置きません。
+ローカル側は起動時に自動で読み込まれ、ベースに追記されます。設定変更は不要です。
+
+```powershell
+# テンプレートをコピーして作る
+copy pc\persona\usachan.local.md.example pc\persona\usachan.local.md
+# あとは中身にセリフを貼るだけ
+```
+
+読み込まれているかは起動ログで確認できます。
+
+```
+ペルソナ: usachan.md + usachan.local.md（ローカル専用）    ← 両方読めている
+ペルソナ: usachan.md のみ。usachan.local.md を作ると...     ← ベースだけ
+```
+
+`usachan.local.md` は `.gitignore` と pre-commit フックの**二重**で保護されており、
+`git add -f` で強制的にステージしてもコミットが止まります。
+
 ## 設定
 
 `config.yaml` を編集します。よく触るのは:
@@ -59,14 +94,10 @@ ollama pull qwen2.5:3b
 | `wake.words` | ウェイクワード。ひらがなで書く（カタカナ・漢字は自動で吸収） |
 | `tts.speaker` | VOICEVOX の話者 ID。`--list-speakers` で確認 |
 | `tts.speed` | 話速。1.1〜1.2 くらいがロボットらしい |
-| `llm.model` | Ollama のモデル名 |
+| `llm.model` | Ollama のモデル名。**非推論モデルであること** |
+| `llm.num_ctx` | 小さいほど VRAM に載る。4GB では 2048 が実測で最速 |
 | `stt.model` | `tiny` / `base` / `small`。精度が足りなければ上げる |
 | `vad.threshold` | 上げると誤検出が減り、下げると小声を拾う |
-
-## ペルソナの調整
-
-口調は `persona/usachan.md` **だけ**を編集します。コードは触りません。
-原作のセリフ例を「セリフ例」セクションに貼るほど再現度が上がります。
 
 ## トラブル
 
@@ -79,8 +110,11 @@ Step 1 では再生中にマイクを閉じているため、原則起きませ�
 それでも起きる場合は `vad.threshold` を上げてください。
 
 **返事が遅い**
-初回だけモデルのロードで数十秒かかります（2回目以降は速い）。
+初回だけモデルのロードで6秒ほどかかります（2回目以降は速い）。
 それ以外で遅い場合は `-v` を付けて「初音出しまで」の値を確認してください。
+
+**返答に英語の独り言が混ざる**
+推論モデルを使っています。`llm.model` を `-instruct` 版にしてください。
 
 ## 構成
 
@@ -94,5 +128,5 @@ Step 1 では再生中にマイクを閉じているため、原則起きませ�
 | `audio/player.py` | 再生キュー（Step 3 で CoreS3 送信に差し替え） |
 | `stt/whisper.py` | faster-whisper |
 | `llm/client.py` | Ollama / Claude の切り替え |
-| `llm/sentence.py` | ストリームの文分割・感情タグ抽出 |
+| `llm/sentence.py` | ストリームの文分割・感情タグ抽出・TTS サニタイズ |
 | `tts/voicevox.py` | VOICEVOX |
