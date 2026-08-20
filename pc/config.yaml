@@ -6,6 +6,9 @@ wake:
   words: ["うさちゃん", "うさぎちゃん", "うさこ"]
   # 一度起動したら、この秒数はウェイクワード不要で会話を続ける
   conversation_window_sec: 20
+  # 認識のゆれを許す編集距離。0 で完全一致のみ。
+  # whisper は「ウサちゃん」を「おさちゃん」と綴ることがあるため 1 が既定
+  fuzzy_distance: 1
   # 呼ばれただけ（用件なし）のときの返し
   greeting: "はい、なんでしょう？"
 
@@ -23,9 +26,13 @@ vad:
 
 stt:
   model: "base"             # tiny / base / small / medium
-  device: "cpu"             # GPU は LLM に明け渡すので CPU。精度が要るなら cuda
-  compute_type: "int8"
+  device: "cuda"            # 実測 976ms(cpu) -> 114ms(gpu)。失敗時は自動で cpu に落ちる
+  compute_type: "int8_float16"   # cpu に落ちた場合は int8 が使われる
   language: "ja"
+  # 固有名詞を先に見せると綴りは安定するが、似た音まで引き寄せて誤反応が増える。
+  # 実測では null + wake.fuzzy_distance=1 が最良（取りこぼし 0/5・誤反応 0/10）だった。
+  # 詳細は docs/dialogue-system.md の「ウェイクワード」節。
+  initial_prompt: null
 
 llm:
   backend: "ollama"         # ollama / claude

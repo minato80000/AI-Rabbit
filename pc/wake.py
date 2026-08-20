@@ -44,6 +44,35 @@ def normalize(text: str) -> tuple[str, list[int]]:
     return "".join(chars), idx
 
 
+def _edit_distance(a: str, b: str) -> int:
+    """レーベンシュタイン距離。文字列は数文字なので素朴な実装で十分。"""
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _fuzzy_find(text: str, word: str, max_dist: int) -> tuple[int, int] | None:
+    """text の中から word に近い部分文字列を探し、その範囲を返す。
+
+    whisper は「ウサちゃん」を「おさちゃん」と綴ることがある。
+    完全一致だけに頼ると名前を呼んでも反応しないので、少しの誤差を許す。
+    """
+    n, m = len(text), len(word)
+    lo = max(1, m - max_dist)
+    hi = m + max_dist
+    for start in range(n):
+        for length in range(lo, min(hi, n - start) + 1):
+            if _edit_distance(text[start:start + length], word) <= max_dist:
+                return start, start + length
+    return None
+
+
 @dataclass
 class WakeResult:
     addressed: bool  # ウサちゃんに話しかけられたか
@@ -55,12 +84,17 @@ class WakeDetector:
         self,
         words: list[str],
         conversation_window_sec: float = 20.0,
+        fuzzy_distance: int = 1,
     ) -> None:
         # 設定側の表記ゆれも吸収するため、単語リストも正規化しておく
         self.words = [normalize(w)[0] for w in words if w.strip()]
         self.window = conversation_window_sec
+        self.fuzzy_distance = fuzzy_distance
         self._last_interaction = 0.0
-        log.info("wake words: %s (window=%.0fs)", self.words, self.window)
+        log.info(
+            "wake words: %s (window=%.0fs, fuzzy=%d)",
+            self.words, self.window, self.fuzzy_distance,
+        )
 
     @property
     def conversation_active(self) -> bool:
@@ -80,11 +114,19 @@ class WakeDetector:
         norm, idx = normalize(text)
         for w in self.words:
             pos = norm.find(w)
-            if pos < 0:
+            if pos >= 0:
+                span = (pos, pos + len(w))
+            elif self.fuzzy_distance > 0:
+                found = _fuzzy_find(norm, w, self.fuzzy_distance)
+                if found is None:
+                    continue
+                span = found
+                log.debug("wake word あいまい一致: %r ≒ %r", norm[span[0]:span[1]], w)
+            else:
                 continue
             # 元テキストから該当スパンを削って用件を取り出す
-            start = idx[pos]
-            end = idx[pos + len(w) - 1] + 1
+            start = idx[span[0]]
+            end = idx[span[1] - 1] + 1
             query = (text[:start] + text[end:]).strip(" 　、。,.!?！？")
             return WakeResult(True, query)
 

@@ -37,6 +37,20 @@ class VoiceVox:
         r.raise_for_status()
         return r.text.strip().strip('"')
 
+    async def prewarm(self) -> float:
+        """話者モデルを先に読み込ませる。
+
+        未初期化の話者は最初の合成が数秒遅れる。起動時に済ませておく。
+        """
+        t0 = time.perf_counter()
+        r = await self._client.post(
+            f"{self.host}/initialize_speaker",
+            params={"speaker": self.speaker},
+            timeout=httpx.Timeout(180.0, connect=3.0),
+        )
+        r.raise_for_status()
+        return time.perf_counter() - t0
+
     async def speakers(self) -> list[tuple[int, str]]:
         """話者ID一覧。原作再現に合う声を選ぶときに使う。"""
         r = await self._client.get(f"{self.host}/speakers")

@@ -9,6 +9,14 @@ onnxruntime>=1.17
 # --- STT (CTranslate2 ベース。torch 非依存) ---
 faster-whisper>=1.0.3
 
+# GPU 推論に必要（CPU で動かすなら不要）。
+# 実測 976ms(cpu) -> 114ms(gpu)。VRAM は base モデルで 200MB 強しか使わず、
+# LLM と同居しても LLM 側の GPU/CPU 配分は変わらなかった。
+# Windows では PATH に通っていないと最初の推論で落ちるため、
+# pc/stt/whisper.py の _ensure_cuda_dlls() が起動時に自動で通す。
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
+
 # --- LLM / TTS への HTTP ---
 httpx>=0.27
 

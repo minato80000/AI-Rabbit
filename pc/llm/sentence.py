@@ -28,8 +28,14 @@ def sanitize_for_tts(text: str) -> str:
 _THINK_OPEN = "<think>"
 _THINK_CLOSE = "</think>"
 
-# 1文が長すぎるときに読点で妥協分割する閾値（初音出しを早めるため）
+# 1文が長すぎるときに読点で妥協分割する閾値
 SOFT_SPLIT_CHARS = 40
+
+# 最初のひと切れだけは、もっと短くても読点で切って先に喋りはじめる。
+# VOICEVOX の合成時間は文字数にほぼ比例し（実測 RTF 約 0.5）、
+# 2文目以降は前の文の再生中に合成が終わるので、初音出しを決めるのは
+# 第1文の長さだけになる。ここを短くするのが体感レイテンシに最も効く。
+FIRST_CHUNK_CHARS = 12
 
 
 def _hold_back(s: str) -> int:
@@ -48,12 +54,18 @@ def _hold_back(s: str) -> int:
 
 
 class SentenceStreamer:
-    def __init__(self, soft_split_chars: int = SOFT_SPLIT_CHARS) -> None:
+    def __init__(
+        self,
+        soft_split_chars: int = SOFT_SPLIT_CHARS,
+        first_chunk_chars: int = FIRST_CHUNK_CHARS,
+    ) -> None:
         self.buf = ""          # まだ処理していない生デルタ
         self.pending = ""      # タグを除去済みで、まだ文として確定していない本文
         self.emotion = Emotion.NEUTRAL
         self.in_think = False
         self.soft_split_chars = soft_split_chars
+        self.first_chunk_chars = first_chunk_chars
+        self.emitted = 0       # これまでに吐いた切れ数
 
     def feed(self, delta: str) -> list[tuple[str, Emotion]]:
         self.buf += delta
@@ -106,23 +118,36 @@ class SentenceStreamer:
                 if ch in _SENT_END:
                     cut = i + 1
                     break
+
             if cut < 0:
-                # 句点が来ないまま長くなったら読点で妥協する
-                if len(self.pending) >= self.soft_split_chars:
-                    comma = self.pending.rfind("、", 0, self.soft_split_chars + 10)
-                    if comma > 0:
-                        cut = comma + 1
+                # 句点が来ないまま長くなったら読点で妥協する。
+                # 最初のひと切れだけは閾値を下げ、最初の読点で早めに切る。
+                if self.emitted == 0:
+                    limit = self.first_chunk_chars
+                    if len(self.pending) >= limit:
+                        comma = self.pending.find("、", 0, limit + 10)
+                        if comma > 0:
+                            cut = comma + 1
+                else:
+                    limit = self.soft_split_chars
+                    if len(self.pending) >= limit:
+                        comma = self.pending.rfind("、", 0, limit + 10)
+                        if comma > 0:
+                            cut = comma + 1
                 if cut < 0:
                     break
+
             text = sanitize_for_tts(self.pending[:cut])
             self.pending = self.pending[cut:]
             if text:
                 sentences.append((text, self.emotion))
+                self.emitted += 1
 
         if final:
             tail = sanitize_for_tts(self.pending)
             self.pending = ""
             if tail:
                 sentences.append((tail, self.emotion))
+                self.emitted += 1
 
         return sentences

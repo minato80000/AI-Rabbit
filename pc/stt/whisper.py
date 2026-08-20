@@ -1,36 +1,86 @@
 """faster-whisper による音声認識。
 
 CTranslate2 ベースなので torch には依存しない。
-device は config で切り替える（GPU は LLM に明け渡すため既定は cpu）。
+
+GPU で動かすと CPU の 1/8 程度の時間で済む（実測 976ms -> 114ms）。
+VRAM は base モデルで 200MB 強しか使わず、LLM と同居しても
+LLM 側の GPU/CPU 配分は変わらなかった。既定は cuda、失敗したら cpu に落ちる。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
+from pathlib import Path
 
 import numpy as np
 
 log = logging.getLogger(__name__)
 
 
+def _ensure_cuda_dlls() -> None:
+    """nvidia の pip パッケージが置いた DLL を探索パスに通す。
+
+    Windows では cuBLAS / cuDNN が PATH 上にないと、モデルのロードは通るのに
+    最初の推論で「cublas64_12.dll is not found」で落ちる。
+    os.add_dll_directory では CTranslate2 の遅延ロードに効かないため PATH を触る。
+    """
+    try:
+        import nvidia
+    except ImportError:
+        return
+    # nvidia-* は名前空間パッケージなので __file__ は None。__path__ を使う
+    roots = [Path(p).resolve() for p in getattr(nvidia, "__path__", [])]
+    dirs = [str(d) for r in roots for d in r.glob("*/bin") if d.is_dir()]
+    if not dirs:
+        return
+    current = os.environ.get("PATH", "")
+    missing = [d for d in dirs if d not in current]
+    if missing:
+        os.environ["PATH"] = os.pathsep.join(missing) + os.pathsep + current
+        log.debug("CUDA DLL パスを追加: %s", missing)
+
+
 class Whisper:
     def __init__(
         self,
         model: str = "base",
-        device: str = "cpu",
-        compute_type: str = "int8",
+        device: str = "cuda",
+        compute_type: str = "int8_float16",
         language: str = "ja",
+        initial_prompt: str | None = None,
     ) -> None:
+        self.language = language
+        # 固有名詞を先に見せておくと綴りが安定する。
+        # これがないと「ウサちゃん」が「おさちゃん」になり、名前を呼んでも反応しない。
+        self.initial_prompt = initial_prompt
+
+        self.device, self.compute_type = self._load(model, device, compute_type)
+
+    def _load(self, model: str, device: str, compute_type: str) -> tuple[str, str]:
         from faster_whisper import WhisperModel
 
+        if device == "cuda":
+            _ensure_cuda_dlls()
+
         t0 = time.perf_counter()
-        self.model = WhisperModel(model, device=device, compute_type=compute_type)
-        self.language = language
+        try:
+            self.model = WhisperModel(model, device=device, compute_type=compute_type)
+            # ロードが通っても最初の推論で落ちることがあるので、ここで一度回す
+            self._transcribe_sync(np.zeros(16000, dtype=np.float32))
+        except Exception as e:
+            if device != "cuda":
+                raise
+            log.warning("GPU が使えないので CPU にフォールバックします: %s", e)
+            device, compute_type = "cpu", "int8"
+            self.model = WhisperModel(model, device=device, compute_type=compute_type)
+
         log.info(
             "whisper loaded: %s / %s / %s (%.1fs)",
             model, device, compute_type, time.perf_counter() - t0,
         )
+        return device, compute_type
 
     def _transcribe_sync(self, audio: np.ndarray) -> str:
         segments, _ = self.model.transcribe(
@@ -39,6 +89,7 @@ class Whisper:
             beam_size=1,          # 対話用途では貪欲法で十分。速度優先
             vad_filter=False,     # 区間切り出しは Silero VAD 側で済んでいる
             condition_on_previous_text=False,  # 前文脈の引きずりによる幻聴を防ぐ
+            initial_prompt=self.initial_prompt,
         )
         return "".join(s.text for s in segments).strip()
 

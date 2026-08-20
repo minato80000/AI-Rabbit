@@ -8,6 +8,7 @@ Step 1 ではマイクもスピーカーも PC を使います（CoreS3 はま�
 | | 用途 | 導入 |
 |---|---|---|
 | Python 3.12 | 本体 | 導入済み |
+| NVIDIA GPU | STT の高速化（任意） | `requirements.txt` に含まれる。無ければ CPU で動く |
 | Ollama | ローカル LLM | `winget install Ollama.Ollama` |
 | VOICEVOX | 音声合成 | https://voicevox.hiroshiba.jp/ からインストール |
 
@@ -97,6 +98,9 @@ copy pc\persona\usachan.local.md.example pc\persona\usachan.local.md
 | `llm.model` | Ollama のモデル名。**非推論モデルであること** |
 | `llm.num_ctx` | 小さいほど VRAM に載る。4GB では 2048 が実測で最速 |
 | `stt.model` | `tiny` / `base` / `small`。精度が足りなければ上げる |
+| `stt.device` | `cuda` 推奨（実測 976ms→114ms）。失敗時は自動で `cpu` に落ちる |
+| `stt.initial_prompt` | `null` 推奨。固有名詞を足すと誤反応が増える（実測済み） |
+| `wake.fuzzy_distance` | 認識のゆれを許す編集距離。`1` で取りこぼし・誤反応ともゼロ |
 | `vad.threshold` | 上げると誤検出が減り、下げると小声を拾う |
 
 ## トラブル
@@ -115,6 +119,16 @@ Step 1 では再生中にマイクを閉じているため、原則起きませ�
 
 **返答に英語の独り言が混ざる**
 推論モデルを使っています。`llm.model` を `-instruct` 版にしてください。
+
+**名前を呼んでも反応しない**
+whisper が「ウサちゃん」を「おさちゃん」と綴ることがあります。
+`wake.fuzzy_distance` を `1`（既定）にしてください。`0` だと取りこぼします。
+逆に `stt.initial_prompt` に固有名詞を足すと、似た音まで拾って誤反応が増えます。
+
+**GPU で動いているか確認したい**
+起動ログに `whisper loaded: base / cuda / int8_float16` と出ます。
+`cpu` と出ている場合は CUDA ライブラリが見つからずフォールバックしています
+（動作はしますが 8 倍遅くなります）。
 
 ## 構成
 

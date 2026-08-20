@@ -91,6 +91,7 @@ class Rabbit:
         self.wake = WakeDetector(
             words=cfg["wake"]["words"],
             conversation_window_sec=cfg["wake"]["conversation_window_sec"],
+            fuzzy_distance=cfg["wake"].get("fuzzy_distance", 1),
         )
         self.llm = llm_client.build(cfg["llm"], self.persona)
         self.tts = VoiceVox(**cfg["tts"])
@@ -107,7 +108,8 @@ class Rabbit:
         print("起動前チェック...", flush=True)
         try:
             ver = await self.tts.health()
-            print(f"  VOICEVOX : OK (v{ver})")
+            elapsed = await self.tts.prewarm()
+            print(f"  VOICEVOX : OK (v{ver} / 話者{self.tts.speaker} 準備 {elapsed:.1f}s)")
         except Exception as e:
             raise SystemExit(
                 f"  VOICEVOX : NG ({e})\n\n"
@@ -130,7 +132,7 @@ class Rabbit:
         self.state.set(State.SPEAKING, emotion)
         print(f"  ウサちゃん> {text}")
         pcm = await self.tts.synth(text)
-        self.player.enqueue(pcm)
+        self.player.enqueue(pcm)   # ここで初めて音が出る
 
     async def say(self, text: str, emotion: Emotion = Emotion.NEUTRAL) -> None:
         """固定セリフを喋る。"""
@@ -142,24 +144,31 @@ class Rabbit:
         """LLM の返答を文単位で合成・再生する。全文は待たない。"""
         self.state.set(State.THINKING)
         t0 = time.perf_counter()
-        first_audio_at: float | None = None
         streamer = SentenceStreamer()
         spoken: list[str] = []
+
+        # 第1文が揃った時刻と、実際に音が出はじめた時刻は別物。
+        # 前者は LLM の速さ、後者は TTS 込みの体感レイテンシを表す。
+        first_sentence_at: float | None = None
+        first_audio_at: float | None = None
+
+        async def emit(text: str, emotion: Emotion) -> None:
+            nonlocal first_sentence_at, first_audio_at
+            if first_sentence_at is None:
+                first_sentence_at = time.perf_counter()
+            spoken.append(text)
+            await self._emit(text, emotion)
+            if first_audio_at is None:
+                first_audio_at = time.perf_counter()
 
         try:
             async for delta in self.llm.stream(query):
                 if self.cfg["debug"]["print_llm_raw"]:
                     print(delta, end="", flush=True)
                 for text, emotion in streamer.feed(delta):
-                    if first_audio_at is None:
-                        first_audio_at = time.perf_counter()
-                    spoken.append(text)
-                    await self._emit(text, emotion)
+                    await emit(text, emotion)
             for text, emotion in streamer.flush():
-                if first_audio_at is None:
-                    first_audio_at = time.perf_counter()
-                spoken.append(text)
-                await self._emit(text, emotion)
+                await emit(text, emotion)
         except Exception:
             log.exception("LLM 応答中にエラー")
             spoken = []
@@ -170,10 +179,12 @@ class Rabbit:
 
         if spoken:
             self.llm.record(query, "".join(spoken))
-        if first_audio_at is not None:
+        if first_audio_at is not None and first_sentence_at is not None:
             log.info(
-                "初音出しまで %.2fs / 応答完了まで %.2fs",
-                first_audio_at - t0, time.perf_counter() - t0,
+                "第1文まで %.2fs / 初音出しまで %.2fs / 再生完了まで %.2fs",
+                first_sentence_at - t0,
+                first_audio_at - t0,
+                time.perf_counter() - t0,
             )
 
     # --- メインループ -----------------------------------------------------
