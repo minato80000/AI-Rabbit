@@ -53,6 +53,7 @@ pc/config.local.yaml
 # （テンプレートは usachan.local.md.example）。
 # pre-commit フック（tools/hooks/pre-commit）でも二重に防いでいる。
 *.local.md
+*.local.h
 private/
 pc/persona/private/
 

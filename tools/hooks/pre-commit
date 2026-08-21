@@ -1,10 +1,10 @@
 #!/bin/sh
 #
-# 原作のセリフなど、公開してはいけない素材のコミットを止める。
+# 公開してはいけない素材のコミットを止める。
 #
-# このリポジトリは public なので、原作の文章はローカル専用ファイルにだけ置く。
-# .gitignore でも除外しているが、git add -f で押し込めてしまうため
-# 最後の砦としてここでも弾く。
+# このリポジトリは public なので、原作の文章・認証情報・個人的なメモは
+# ローカル専用ファイルにだけ置く。.gitignore でも除外しているが、
+# git add -f で押し込めてしまうため最後の砦としてここでも弾く。
 #
 # 有効化:  git config core.hooksPath tools/hooks
 # 意図的に通す場合:  git commit --no-verify
@@ -12,7 +12,12 @@
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [ -z "$staged" ] && exit 0
 
-blocked=$(printf '%s\n' "$staged" | grep -E '(^|/)private/|\.local\.md$|\.local\.ya?ml$|(^|/)\.env($|\.)' || true)
+# ".local." を挟むファイルはすべてローカル専用とみなす。
+#   usachan.local.md / secrets.local.h / config.local.yaml ...
+# 末尾が拡張子で終わるものだけを対象にするので、
+# テンプレート（secrets.local.h.example）は通る。
+blocked=$(printf '%s\n' "$staged" \
+  | grep -E '(^|/)private/|\.local\.[A-Za-z0-9]+$|(^|/)\.env($|\.)' || true)
 
 if [ -n "$blocked" ]; then
   echo ""
@@ -21,7 +26,8 @@ if [ -n "$blocked" ]; then
   echo ""
   printf '%s\n' "$blocked" | sed 's/^/      /'
   echo ""
-  echo "  これらは原作のセリフや秘密情報を置くためのローカル専用ファイルです。"
+  echo "  これらは原作のセリフ・認証情報・個人的なメモを置くための"
+  echo "  ローカル専用ファイルです。"
   echo "  このリポジトリは public なので、コミットすると公開されます。"
   echo ""
   echo "  外す:            git restore --staged <file>"

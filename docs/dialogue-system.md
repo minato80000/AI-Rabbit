@@ -495,11 +495,15 @@ pc/
 
 firmware/
   platformio.ini
+  README.md
   src/
-    main.cpp             M5Unified init, WiFi, WS クライアント
-    audio_out.cpp        リングバッファ → M5.Speaker
-    face.cpp             state に応じた顔描画・口パク
-    sensors.cpp          touch / IMU → PC
+    main.cpp                   全体の流れ、タッチと加速度センサ
+    config.h                   公開してよい設定
+    secrets.local.h            ★WiFi 認証情報（非公開）
+    secrets.local.h.example    上のテンプレート
+    net.cpp                    WiFi と WebSocket、プロトコルの処理
+    audio_out.cpp              リングバッファ → M5.Speaker
+    face.cpp                   state に応じた画面表示・口パク
 ```
 
 ペルソナは**コードに埋め込まず独立ファイル**にする。原作再現の調整はここだけを触って回す。
@@ -512,8 +516,8 @@ firmware/
 |---|---|---|
 | 1 | PC 単体で対話ループ（音声出力も PC スピーカー） | **完了。実マイクで動作確認済み** |
 | 2 | WebSocket サーバ + Python ダミークライアント | **完了。プロトコル自己テスト 16/16 合格** |
-| 3 | CoreS3 ファーム: WiFi + WS + 音声再生 | 未着手 |
-| 4 | 顔描画 + state 同期 + 口パク | 未着手 |
+| 3 | CoreS3 ファーム: WiFi + WS + 音声再生 | **実装済み。ビルド確認済み・実機未検証** |
+| 4 | 顔描画 + state 同期 + 口パク | 最小限は実装済み（状態表示・口パク・まばたき） |
 | 5 | barge-in / 会話モード / タッチ・IMU | 会話モードとイベント受信は実装済み。barge-in は未対応 |
 
 **Step 1 が全体の 9 割。** ここが動けば対話システムとしては完成しており、
