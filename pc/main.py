@@ -403,6 +403,18 @@ async def text_mode(cfg: dict, text: str) -> None:
         await rabbit.aclose()
 
 
+async def sample_speakers_mode(cfg: dict, spec: str, line: str | None, play: bool) -> None:
+    from .diagnose import sample_speakers
+
+    ids = None
+    if spec and spec.lower() not in ("all", "auto", "default"):
+        try:
+            ids = [int(x) for x in spec.replace(",", " ").split()]
+        except ValueError:
+            raise SystemExit(f"  話者 ID の指定が不正です: {spec!r}（例: --sample-speakers 3,61,47）")
+    await sample_speakers(cfg, ids=ids, line=line, play=play)
+
+
 async def check_mic_mode(cfg: dict, seconds: float, wav: Path | None) -> None:
     from .diagnose import check_mic
 
@@ -431,6 +443,10 @@ def main() -> int:
                     help="--check-mic の録音秒数")
     ap.add_argument("--wav", type=Path,
                     help="録音済み WAV を解析する（--check-mic と併用。録り直し不要）")
+    ap.add_argument("--sample-speakers", nargs="?", const="auto", metavar="IDS",
+                    help="複数の話者で同じセリフを合成して聴き比べる（例: --sample-speakers 3,61,47）")
+    ap.add_argument("--sample-text", help="聴き比べに使うセリフ（省略時はペルソナから生成）")
+    ap.add_argument("--no-play", action="store_true", help="聴き比べで音を鳴らさず保存だけする")
     ap.add_argument("--serve", action="store_true",
                     help="CoreS3 への送信を有効にする（audio.output を both に上書き）")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -452,7 +468,10 @@ def main() -> int:
     if args.serve:
         cfg["audio"]["output"] = "both"
     try:
-        if args.check_mic or args.wav:
+        if args.sample_speakers:
+            asyncio.run(sample_speakers_mode(
+                cfg, args.sample_speakers, args.sample_text, not args.no_play))
+        elif args.check_mic or args.wav:
             asyncio.run(check_mic_mode(cfg, args.seconds, args.wav))
         elif args.list_speakers:
             asyncio.run(list_speakers(cfg))

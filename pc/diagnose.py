@@ -205,3 +205,94 @@ async def check_mic(cfg: dict, seconds: float = 6.0, wav: Path | None = None) ->
     print("    上の結果を見て、一番正確なモデルを config.yaml の stt.model に設定してください。")
     print("    beam=5 は精度が上がる代わりに少し遅くなります。")
     print(f"    録音は {path} に残っているので、後から再解析できます。")
+
+
+# --- 話者の聴き比べ -------------------------------------------------------
+
+# 原作再現に使えそうな候補。--sample-speakers で ID を明示すればこれは使わない
+CANDIDATE_SPEAKERS = [3, 1, 61, 47, 8, 43, 0, 70]
+
+SAMPLE_DIR = ROOT.parent / "recordings" / "samples"
+
+
+async def _make_sample_line(cfg: dict) -> str:
+    """ペルソナに沿った短いセリフを LLM に1つ作らせる。
+
+    聴き比べ用の文をコードに埋め込むと、原作由来の口調が公開ファイルに
+    入ってしまう。実行時にペルソナ（非公開側を含む）から作らせれば、
+    公開されるコードには何も残らない。
+    """
+    from .llm import client as llm_client
+    from .llm.sentence import SentenceStreamer
+
+    # main 側の関数を使うと循環 import になるのでここで読む
+    from .main import load_persona
+
+    llm = llm_client.build(cfg["llm"], load_persona(cfg))
+    try:
+        st = SentenceStreamer()
+        parts: list[str] = []
+        async for delta in llm.stream("自己紹介を1文だけ、いつもの口調で言って"):
+            for text, _ in st.feed(delta):
+                parts.append(text)
+        for text, _ in st.flush():
+            parts.append(text)
+    finally:
+        await llm.aclose()
+    line = "".join(parts).strip()
+    return line or "こんにちは。ボクはウサちゃんロボだよ。"
+
+
+async def sample_speakers(
+    cfg: dict,
+    ids: list[int] | None = None,
+    line: str | None = None,
+    play: bool = True,
+) -> None:
+    """同じセリフを複数の話者で合成して聴き比べる。"""
+    import sounddevice as sd
+
+    from .tts.voicevox import VoiceVox
+
+    targets = ids if ids else CANDIDATE_SPEAKERS
+
+    if line is None:
+        print("  ペルソナに沿ったセリフを生成中...", end="", flush=True)
+        line = await _make_sample_line(cfg)
+        print(" 完了")
+    print(f"  セリフ: {line}")
+    print()
+
+    tts = VoiceVox(**cfg["tts"])
+    try:
+        names = dict(await tts.speakers())
+    except Exception as e:
+        raise SystemExit(f"  VOICEVOX に接続できません: {e}")
+
+    SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        for sid in targets:
+            label = names.get(sid, "(不明な話者)")
+            tts.speaker = sid
+            try:
+                pcm = await tts.synth(line)
+            except Exception as e:
+                print(f"  {sid:4d}  {label:34} 合成失敗 ({e})")
+                continue
+            path = SAMPLE_DIR / f"speaker-{sid:03d}.wav"
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(tts.sample_rate)
+                w.writeframes(pcm.tobytes())
+            print(f"  {sid:4d}  {label:34} {len(pcm)/tts.sample_rate:.2f}s")
+            if play:
+                sd.play(pcm, tts.sample_rate)
+                sd.wait()
+                await asyncio.sleep(0.3)
+    finally:
+        await tts.aclose()
+
+    print()
+    print(f"  WAV を {SAMPLE_DIR} に保存しました（非公開）。")
+    print("  気に入った ID を config.yaml の tts.speaker に設定してください。")

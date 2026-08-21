@@ -111,6 +111,45 @@ WARNING usachan.local.md: 中身の大半（745 文字）が <!-- --> の中に�
 履歴に残すと、モデルが「自分は普段タグを付けない」と学習し、数ターンで
 付けなくなります。実測で付与率が 2/10 から 10/10 に変わりました。
 
+## 声を選ぶ
+
+VOICEVOX には127スタイルあります。まず一覧を出します。
+
+```powershell
+.venv\Scripts\python -m pc.main --list-speakers
+```
+
+ID と名前が出ますが、これだけでは選べないので**聴き比べ**ができます。
+
+```powershell
+# 候補の話者で同じセリフを合成して順に再生する
+.venv\Scripts\python -m pc.main --sample-speakers
+
+# ID を指定する
+.venv\Scripts\python -m pc.main --sample-speakers 3,61,47
+
+# セリフを指定する（省略時はペルソナから自動生成）
+.venv\Scripts\python -m pc.main --sample-speakers --sample-text "こんにちは"
+
+# 鳴らさず WAV に保存だけする
+.venv\Scripts\python -m pc.main --sample-speakers --no-play
+```
+
+セリフを省略すると、**ペルソナに沿った自己紹介を LLM に1文作らせて**から
+各話者で合成します。実際の口調で聴き比べられます。
+
+WAV は `recordings/samples/` に残ります（非公開）。あとから聴き直せます。
+
+気に入った ID を `config.yaml` に設定してください。
+
+```yaml
+tts:
+  speaker: 61        # ここを変える
+  speed: 1.1         # 話速。上げるとテンポよく聞こえる
+  pitch: 0.0         # 音の高さ
+  intonation: 1.0    # 抑揚。上げると感情的になる
+```
+
 ## CoreS3 への送信（Step 2）
 
 CoreS3 の実機がなくても、ダミークライアントでプロトコルと音声転送を試せます。
