@@ -47,6 +47,8 @@ pc/config.local.yaml
 #  原作のセリフなど、公開してはいけない素材
 # ------------------------------------------------------------
 # *.local.md は「ローカル専用」の印。どの階層でも除外する。
+# 原作素材のほか、公開したくない個人的なメモ（docs/retrospective.local.md など）
+# もこの命名に載せる。
 # ペルソナ本体は pc/persona/usachan.local.md に置く運用
 # （テンプレートは usachan.local.md.example）。
 # pre-commit フック（tools/hooks/pre-commit）でも二重に防いでいる。
