@@ -354,8 +354,10 @@ pc/
     sentence.py          ストリームの文分割・感情タグ抽出
   tts/
     voicevox.py          VOICEVOX HTTP、文単位合成
+  audio/
+    sink.py                    出力先の抽象化（ローカル / CoreS3 / 両方）
   transport/
-    server.py            WebSocket サーバ
+    server.py                  WebSocket サーバ
 
 firmware/
   platformio.ini
@@ -374,11 +376,11 @@ firmware/
 
 | # | 内容 | 状態 |
 |---|---|---|
-| 1 | PC 単体で対話ループ（音声出力も PC スピーカー） | **実装済み。VOICEVOX 導入待ちで未検証** |
-| 2 | WebSocket サーバ + Python ダミークライアント | 未着手 |
+| 1 | PC 単体で対話ループ（音声出力も PC スピーカー） | **完了。実マイクで動作確認済み** |
+| 2 | WebSocket サーバ + Python ダミークライアント | **完了。プロトコル自己テスト 16/16 合格** |
 | 3 | CoreS3 ファーム: WiFi + WS + 音声再生 | 未着手 |
 | 4 | 顔描画 + state 同期 + 口パク | 未着手 |
-| 5 | barge-in / 会話モード / タッチ・IMU | 会話モードのみ実装済み |
+| 5 | barge-in / 会話モード / タッチ・IMU | 会話モードとイベント受信は実装済み。barge-in は未対応 |
 
 **Step 1 が全体の 9 割。** ここが動けば対話システムとしては完成しており、
 以降は「どこから声が出るか」「どんな顔をするか」の話になる。
@@ -538,10 +540,23 @@ copy pc\persona\usachan.local.md.example pc\persona\usachan.local.md
 
 用途に合いそうな候補: 中国うさぎ(61) / ナースロボ＿タイプＴ(47) / ずんだもん(3)
 
-#### 4. Step 2 以降
+#### 4. Step 3（CoreS3 ファーム）
 
-Step 1 が固まったら WebSocket サーバ → CoreS3 ファーム → 顔描画 → barge-in。
-ビルド順序の節を参照。PlatformIO は Step 3 まで不要。
+Step 2（WebSocket サーバ）まで完了しているので、次は実機のファーム。
+PC 側の仕様は `tools/protocol_test.py` が固定しているので、これに合わせて書く。
+
+必要なもの:
+- PlatformIO（未導入）
+- CoreS3 実機
+
+実装内容:
+- WiFi 接続 → WebSocket クライアントとして PC に接続
+- 受信した PCM をリングバッファ（300ms）に積んで M5.Speaker へ
+- `audio_flush` で即クリア
+- `state` に応じた顔描画、PCM の RMS から口パク
+- タッチ / IMU を PC へ送信
+
+実機なしでも `tools/dummy_core.py` で PC 側の動作は確認できる。
 
 ### 保留中の判断
 
@@ -559,6 +574,7 @@ Step 1 が固まったら WebSocket サーバ → CoreS3 ファーム → 顔描
 | `main` へのマージ | 未実施。作業ブランチに4コミット |
 | レイテンシ 約3.3s | 目標 1.6〜2.6s に対し超過。Step 4 の顔演出で体感を埋める前提 |
 | 実マイクでの通し | 検証済み。マイク・VAD・STT とも良好 |
+| **CoreS3 プロトコル（Step 2）** | **検証済み。転送した音声を再認識して内容一致を確認** |
 | barge-in | 未実装（Step 5）。音響エコーの処理が要る |
 | PlatformIO | 未導入（Step 3 まで不要） |
 | 顔のデザイン（目・口の描画） | 未着手。筐体設計と揃える必要あり |

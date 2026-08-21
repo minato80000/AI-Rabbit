@@ -18,11 +18,13 @@ import yaml
 
 from .audio.mic import Mic
 from .audio.player import Player
+from .audio.sink import NullSink, TeeSink
 from .audio.vad import UtteranceSegmenter
 from .llm import client as llm_client
 from .llm.sentence import SentenceStreamer
 from .state import Emotion, State, StateMachine
 from .stt.whisper import Whisper
+from .transport.server import RabbitServer
 from .tts.voicevox import VoiceVox
 from .wake import WakeDetector
 
@@ -95,14 +97,51 @@ class Rabbit:
         )
         self.llm = llm_client.build(cfg["llm"], self.persona)
         self.tts = VoiceVox(**cfg["tts"])
-        self.player = Player(sample_rate=24000, device=cfg["audio"]["output_device"])
+
+        # 音声の出力先。local=PCのスピーカー / coreS3=ウサギ / both=両方
+        target = cfg["audio"].get("output", "local")
+        if target not in ("local", "coreS3", "both"):
+            raise ValueError(f"audio.output は local/coreS3/both のいずれか: {target!r}")
+        self.output_target = target
+
+        self.player: Player | None = None
+        if target in ("local", "both"):
+            self.player = Player(sample_rate=24000, device=cfg["audio"]["output_device"])
+
+        self.server: RabbitServer | None = None
+        if target in ("coreS3", "both"):
+            tcfg = cfg.get("transport", {})
+            self.server = RabbitServer(
+                host=tcfg.get("host", "0.0.0.0"),
+                port=tcfg.get("port", 8765),
+                path=tcfg.get("path", "/rabbit"),
+                sample_rate=24000,
+                chunk_ms=tcfg.get("chunk_ms", 20),
+            )
+            self.server.on_event(self._on_core_event)
+
+        self.sink = TeeSink(*(x for x in (self.player, self.server) if x is not None))
+        if not self.sink.sinks:
+            self.sink = NullSink()
+
         self.stt: Whisper | None = None
         self.mic: Mic | None = None
         self.segmenter: UtteranceSegmenter | None = None
 
     def _on_state(self, state: State, emotion: Emotion) -> None:
-        # Step 4 ではここから CoreS3 へ state を push する
         log.debug("state -> %s / %s", state.value, emotion.value)
+        if self.server is not None:
+            self.server.push_state(state.value, emotion.value)
+
+    def _on_core_event(self, ev: dict) -> None:
+        """CoreS3 から届いたイベント。Step 5 でタッチ起動などに使う。"""
+        kind = ev.get("t")
+        if kind == "hello":
+            log.info("CoreS3 が接続しました (fw=%s)", ev.get("fw"))
+        elif kind in ("touch", "imu"):
+            log.info("CoreS3 イベント: %s", ev)
+        elif kind == "audio_done":
+            log.debug("CoreS3 の再生完了")
 
     async def preflight(self) -> None:
         print("起動前チェック...", flush=True)
@@ -132,12 +171,12 @@ class Rabbit:
         self.state.set(State.SPEAKING, emotion)
         print(f"  ウサちゃん> {text}")
         pcm = await self.tts.synth(text)
-        self.player.enqueue(pcm)   # ここで初めて音が出る
+        self.sink.enqueue(pcm)   # ここで初めて音が出る
 
     async def say(self, text: str, emotion: Emotion = Emotion.NEUTRAL) -> None:
         """固定セリフを喋る。"""
         await self._emit(text, emotion)
-        await self.player.drain()
+        await self.sink.drain()
         self.state.set(State.IDLE)
 
     async def respond(self, query: str) -> None:
@@ -174,7 +213,7 @@ class Rabbit:
             spoken = []
             await self._emit("あれ、うまく考えられないのだ", Emotion.PUZZLED)
 
-        await self.player.drain()
+        await self.sink.drain()
         self.state.set(State.IDLE)
 
         if spoken:
@@ -239,8 +278,15 @@ class Rabbit:
                 "音響エコーの処理が必要です。"
             )
 
-        self.player.start()
+        await self.start_output()
         self.mic.start()
+
+        if self.server is not None:
+            tcfg = self.cfg.get("transport", {})
+            print()
+            print(f"  CoreS3 の接続待ち: ws://<このPCのIP>:{tcfg.get('port', 8765)}"
+                  f"{tcfg.get('path', '/rabbit')}")
+            print("  （実機がなければ tools/dummy_core.py で代用できます）")
 
         words = " / ".join(self.cfg["wake"]["words"])
         window = self.cfg["wake"]["conversation_window_sec"]
@@ -262,7 +308,19 @@ class Rabbit:
                     self.segmenter.enabled = True
         finally:
             self.mic.stop()
+            await self.stop_output()
+
+    async def start_output(self) -> None:
+        if self.player is not None:
+            self.player.start()
+        if self.server is not None:
+            await self.server.start()
+
+    async def stop_output(self) -> None:
+        if self.player is not None:
             self.player.stop()
+        if self.server is not None:
+            await self.server.stop()
 
     async def aclose(self) -> None:
         await self.llm.aclose()
@@ -290,10 +348,18 @@ async def text_mode(cfg: dict, text: str) -> None:
     rabbit = Rabbit(cfg)
     try:
         await rabbit.preflight()
-        rabbit.player.start()
+        await rabbit.start_output()
+        if rabbit.server is not None:
+            wait = cfg.get("transport", {}).get("wait_client_sec", 0)
+            if wait:
+                print(f"  CoreS3 の接続を待っています（最大 {wait:.0f}秒）...")
+                until = time.monotonic() + wait
+                while rabbit.server.clients == 0 and time.monotonic() < until:
+                    await asyncio.sleep(0.2)
+                print(f"  接続 {rabbit.server.clients} 台")
         print(f"\n  あなた   > {text}")
         await rabbit.respond(text)
-        rabbit.player.stop()
+        await rabbit.stop_output()
     finally:
         await rabbit.aclose()
 
@@ -326,6 +392,8 @@ def main() -> int:
                     help="--check-mic の録音秒数")
     ap.add_argument("--wav", type=Path,
                     help="録音済み WAV を解析する（--check-mic と併用。録り直し不要）")
+    ap.add_argument("--serve", action="store_true",
+                    help="CoreS3 への送信を有効にする（audio.output を both に上書き）")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -342,6 +410,8 @@ def main() -> int:
         return 0
 
     cfg = load_config(args.config)
+    if args.serve:
+        cfg["audio"]["output"] = "both"
     try:
         if args.check_mic or args.wav:
             asyncio.run(check_mic_mode(cfg, args.seconds, args.wav))

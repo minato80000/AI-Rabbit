@@ -15,6 +15,9 @@ wake:
 audio:
   input_device: null        # null = OS のデフォルト
   output_device: null
+  # 音声の出力先。local=PCのスピーカー / coreS3=ウサギ / both=両方
+  # Step 1 は local。CoreS3 のファームができたら coreS3 か both にする
+  output: "local"
   sample_rate: 16000        # VAD / STT が 16kHz を要求するので固定
   frame_samples: 512        # Silero VAD v5 は 16kHz で 512 サンプル固定
 
@@ -62,6 +65,14 @@ persona:
   # 存在すれば自動で読み込んでベースに追記する。
   # .gitignore と pre-commit フックの両方で保護されており、リポジトリには入らない。
   local_file: "persona/usachan.local.md"
+
+# CoreS3 との WebSocket 接続（audio.output が coreS3 または both のとき有効）
+transport:
+  host: "0.0.0.0"           # LAN 内から繋げるよう全インターフェースで待ち受ける
+  port: 8765
+  path: "/rabbit"
+  chunk_ms: 20              # 送信する PCM チャンクの長さ
+  wait_client_sec: 0        # --text 実行時に接続を待つ秒数（0 で待たない）
 
 behavior:
   # PC のマイクと PC のスピーカーが同じ部屋にあるため、Step 1 では

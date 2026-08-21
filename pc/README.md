@@ -86,6 +86,59 @@ copy pc\persona\usachan.local.md.example pc\persona\usachan.local.md
 `usachan.local.md` は `.gitignore` と pre-commit フックの**二重**で保護されており、
 `git add -f` で強制的にステージしてもコミットが止まります。
 
+## CoreS3 への送信（Step 2）
+
+CoreS3 の実機がなくても、ダミークライアントでプロトコルと音声転送を試せます。
+
+**PC 側**（サーバを有効にして起動）
+
+```powershell
+.venv\Scripts\python -m pc.main --serve
+```
+
+`--serve` は `config.yaml` の `audio.output` を `both` に上書きします
+（PC のスピーカーとウサギの両方から音が出る）。恒久的に変えるなら設定側で:
+
+| `audio.output` | 動作 |
+|---|---|
+| `local` | PC のスピーカーだけ（既定。Step 1 の動作） |
+| `coreS3` | ウサギだけ |
+| `both` | 両方。開発中はこれが便利 |
+
+**CoreS3 の代わり**（別のターミナルで）
+
+```powershell
+.venv\Scripts\python tools\dummy_core.py
+```
+
+受け取った音声を PC のスピーカーで鳴らし、状態変化を顔文字で表示します。
+
+```
+[接続] ws://127.0.0.1:8765/rabbit
+  [state] thinking  / neutral    ( ･ω･)？
+  [state] speaking  / happy      ( ^ω^ )
+  [audio] begin 24000Hz s16le
+  [audio] end   164864 bytes / 音声 3.43s / 経過 3.56s
+```
+
+主なオプション:
+
+| | |
+|---|---|
+| `--no-play` | 音を鳴らさない（受信の確認だけ） |
+| `--save out.wav` | 受信した音声を保存する |
+| `--touch-after 3` | 3秒後に touch イベントを送る |
+| `--host 192.168.x.x` | 別マシンから繋ぐ |
+
+**プロトコルの自己テスト**
+
+```powershell
+.venv\Scripts\python tools\protocol_test.py
+```
+
+状態 push・音声転送・barge-in・イベント・再接続・誤パス拒否を自動で確認します。
+CoreS3 のファームを書くときは、この仕様に合わせてください。
+
 ## 設定
 
 `config.yaml` を編集します。よく触るのは:

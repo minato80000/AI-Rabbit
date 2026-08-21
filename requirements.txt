@@ -20,5 +20,8 @@ nvidia-cudnn-cu12
 # --- LLM / TTS への HTTP ---
 httpx>=0.27
 
+# --- CoreS3 との WebSocket 接続 ---
+websockets>=14
+
 # --- 設定 ---
 pyyaml>=6.0
