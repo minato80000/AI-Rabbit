@@ -39,6 +39,10 @@ stt:
   # 1=貪欲法(最速) / 5=ビームサーチ(高精度)。
   # medium では beam=5 にしても結果が変わらなかったので 1 でよい
   beam_size: 1
+  # 無音やノイズを渡されると whisper は字幕由来の幻聴を返す。
+  # そのとき no_speech_prob は 0.9 台、本物の音声は 0.1 未満（実測）。
+  # これを超えた区間は捨てる。誤検出が気になるなら上げる
+  no_speech_threshold: 0.6
 
 llm:
   backend: "ollama"         # ollama / claude

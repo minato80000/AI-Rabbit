@@ -51,10 +51,16 @@ class Whisper:
         language: str = "ja",
         initial_prompt: str | None = None,
         beam_size: int = 1,
+        no_speech_threshold: float = 0.6,
     ) -> None:
         self.language = language
         # 1 は貪欲法で最速。GPU なら 5 にしても余裕があり、精度が上がる
         self.beam_size = beam_size
+        # これを超えた区間は捨てる。whisper は無音やノイズを渡されると
+        # 「ご視聴ありがとうございました」のような字幕由来の幻聴を返すが、
+        # そのとき no_speech_prob は 0.91 以上になる（実測）。
+        # 本物の音声は 0.08 以下だったので、間を取って 0.6 を既定とする。
+        self.no_speech_threshold = no_speech_threshold
         # 固有名詞を先に見せておくと綴りが安定する。
         # これがないと「ウサちゃん」が「おさちゃん」になり、名前を呼んでも反応しない。
         self.initial_prompt = initial_prompt
@@ -94,7 +100,19 @@ class Whisper:
             condition_on_previous_text=False,  # 前文脈の引きずりによる幻聴を防ぐ
             initial_prompt=self.initial_prompt,
         )
-        return "".join(s.text for s in segments).strip()
+
+        # faster-whisper 組み込みの no_speech_threshold は avg_logprob との
+        # AND 判定なので、logprob が正常な幻聴は通り抜ける。単独で判定する。
+        kept: list[str] = []
+        for seg in segments:
+            if seg.no_speech_prob > self.no_speech_threshold:
+                log.info(
+                    "幻聴とみなして破棄: %r (no_speech_prob=%.3f)",
+                    seg.text.strip(), seg.no_speech_prob,
+                )
+                continue
+            kept.append(seg.text)
+        return "".join(kept).strip()
 
     async def transcribe(self, audio: np.ndarray) -> str:
         """float32 mono 16kHz を受け取って文字列を返す。"""
