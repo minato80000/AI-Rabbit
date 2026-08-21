@@ -52,6 +52,7 @@ class Whisper:
         initial_prompt: str | None = None,
         beam_size: int = 1,
         no_speech_threshold: float = 0.6,
+        hallucination_patterns: list[str] | None = None,
     ) -> None:
         self.language = language
         # 1 は貪欲法で最速。GPU なら 5 にしても余裕があり、精度が上がる
@@ -61,6 +62,11 @@ class Whisper:
         # そのとき no_speech_prob は 0.91 以上になる（実測）。
         # 本物の音声は 0.08 以下だったので、間を取って 0.6 を既定とする。
         self.no_speech_threshold = no_speech_threshold
+        # no_speech_prob をすり抜ける幻聴のための2層目。
+        # whisper は字幕を大量に学習しており、動画の締めの決まり文句を返すことがある。
+        # モデルが自信を持って出すと確度では弾けないので、文字列でも見る。
+        # ロボットに話しかける言葉として出る可能性が低いものだけを入れること。
+        self.hallucination_patterns = list(hallucination_patterns or [])
         # 固有名詞を先に見せておくと綴りが安定する。
         # これがないと「ウサちゃん」が「おさちゃん」になり、名前を呼んでも反応しない。
         self.initial_prompt = initial_prompt
@@ -105,14 +111,29 @@ class Whisper:
         # AND 判定なので、logprob が正常な幻聴は通り抜ける。単独で判定する。
         kept: list[str] = []
         for seg in segments:
+            text = seg.text.strip()
             if seg.no_speech_prob > self.no_speech_threshold:
                 log.info(
-                    "幻聴とみなして破棄: %r (no_speech_prob=%.3f)",
-                    seg.text.strip(), seg.no_speech_prob,
+                    "幻聴とみなして破棄（確度）: %r (no_speech_prob=%.3f)",
+                    text, seg.no_speech_prob,
+                )
+                continue
+            hit = self._matches_hallucination(text)
+            if hit is not None:
+                log.info(
+                    "幻聴とみなして破棄（既知の文言 %r）: %r (no_speech_prob=%.3f)",
+                    hit, text, seg.no_speech_prob,
                 )
                 continue
             kept.append(seg.text)
         return "".join(kept).strip()
+
+    def _matches_hallucination(self, text: str) -> str | None:
+        """既知の幻聴に該当すればそのパターンを返す。"""
+        for pat in self.hallucination_patterns:
+            if pat and pat in text:
+                return pat
+        return None
 
     async def transcribe(self, audio: np.ndarray) -> str:
         """float32 mono 16kHz を受け取って文字列を返す。"""
