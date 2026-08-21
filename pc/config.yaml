@@ -53,7 +53,7 @@ llm:
 
 tts:
   host: "http://127.0.0.1:50021"
-  speaker: 1                # VOICEVOX の話者ID。原作再現に合わせて後で選定する
+  speaker: 1                # ずんだもん / あまあま。聴き比べて決定（--sample-speakers）
   speed: 1.1
   pitch: 0.0
   intonation: 1.0
