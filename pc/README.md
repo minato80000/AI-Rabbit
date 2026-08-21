@@ -297,7 +297,8 @@ stt:
 診断ツールで解析することもできます。
 
 ```powershell
-.venv\Scripts\python -m pc.main --wav recordingsejected60821-205038-047_conf_nsp0.93.wav
+.venv\Scripts\python -m pc.main --wav recordings
+ejected60821-205038-047_conf_nsp0.93.wav
 ```
 
 原因が分かったら `stt.save_rejected: false` にして止められます。
@@ -305,6 +306,14 @@ stt:
 しきい値のほうを厳しくするなら `stt.no_speech_threshold` を下げます（既定 0.6）。
 実測では本物の音声が 0.08 以下、幻聴が 0.91 以上だったので、
 0.3〜0.6 の範囲なら本物を巻き込む心配はほぼありません。
+
+**「マイクの取りこぼし」という警告が出る**
+イベントループが詰まっていて、聞いている最中のマイク入力を捨てています。
+本来は出ないはずの警告です。CPU が別の重い処理に占有されていないか確認して
+ください。
+
+なお応答中・発話中はマイクを止めているので、その間の音は捨てられますが
+警告は出ません（意図した動作です）。
 
 **GPU で動いているか確認したい**
 起動ログに `whisper loaded: base / cuda / int8_float16` と出ます。

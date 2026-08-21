@@ -338,12 +338,16 @@ class Rabbit:
         try:
             self.state.set(State.IDLE)
             async for audio in self.segmenter.utterances():
-                # 処理・発話中はマイクを閉じる（自分の声を拾わないため）
+                # 処理・発話中はマイクを閉じる（自分の声を拾わないため）。
+                # mic.paused でコールバック側から止めることで、この間の
+                # フレームがキューに溜まらないようにする
                 self.segmenter.enabled = False
+                self.mic.paused = True
                 try:
                     await self.handle(audio)
                 finally:
                     self._flush_input()
+                    self.mic.paused = False
                     self.segmenter.enabled = True
         finally:
             self.mic.stop()

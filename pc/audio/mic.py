@@ -30,10 +30,16 @@ class Mic:
         self.queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=max_queue)
         self._stream: sd.InputStream | None = None
         self._dropped = 0
+        # 処理中・発話中は聞かない。True の間はコールバックで即捨てる。
+        # キューに積んでから捨てると、溢れるたびに警告が出て紛らわしいうえ、
+        # フレームごとにスレッド間の受け渡しが走って無駄になる。
+        self.paused = False
 
     def _callback(self, indata, frames, time_info, status) -> None:  # 別スレッド
         if status:
             log.debug("mic status: %s", status)
+        if self.paused:
+            return  # 聞いていないので、そもそも積まない
         frame = indata[:, 0].copy()  # float32 mono
         try:
             self.loop.call_soon_threadsafe(self._put, frame)
@@ -44,10 +50,16 @@ class Mic:
         try:
             self.queue.put_nowait(frame)
         except asyncio.QueueFull:
-            # 消費が追いつかない場合は古い方を捨てる（遅延を溜めない）
+            # 消費が追いつかない場合は古い方を捨てる（遅延を溜めない）。
+            # paused 中は積まないので、ここに来るのは「聞いているのに処理が
+            # 追いついていない」場合だけ。つまり本当に異常な状態。
             self._dropped += 1
             if self._dropped % 50 == 1:
-                log.warning("mic queue full, dropping frames (total=%d)", self._dropped)
+                log.warning(
+                    "マイクの取りこぼし: イベントループが詰まっています "
+                    "(累計 %d フレーム / %.1f 秒ぶん)",
+                    self._dropped, self._dropped * self.frame_samples / self.sample_rate,
+                )
             try:
                 self.queue.get_nowait()
                 self.queue.put_nowait(frame)
