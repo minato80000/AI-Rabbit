@@ -524,7 +524,7 @@ Step 4 の顔演出（thinking 表情）で体感を埋めるのが設計上の�
 2. **Ollama** — 通常は Windows 起動時に常駐している（`localhost:11434`）
 
 ```powershell
-cd C:\Users\minat\projects\AI-Rabbit
+# リポジトリのディレクトリへ移動してから
 
 # 本番
 .venv\Scripts\python -m pc.main

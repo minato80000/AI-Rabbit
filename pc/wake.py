@@ -86,8 +86,14 @@ class WakeDetector:
         conversation_window_sec: float = 20.0,
         fuzzy_distance: int = 1,
     ) -> None:
-        # 設定側の表記ゆれも吸収するため、単語リストも正規化しておく
-        self.words = [normalize(w)[0] for w in words if w.strip()]
+        # 設定側の表記ゆれも吸収するため、単語リストも正規化しておく。
+        # 長いものから照合する。「うさちゃん」と「うさちゃんロボ」が両方ある場合、
+        # 短いほうが先に当たると「ロボ」が用件側に残ってしまう。
+        self.words = sorted(
+            (normalize(w)[0] for w in words if w.strip()),
+            key=len,
+            reverse=True,
+        )
         self.window = conversation_window_sec
         self.fuzzy_distance = fuzzy_distance
         self._last_interaction = 0.0
