@@ -12,6 +12,8 @@ import asyncio
 import logging
 import os
 import time
+import wave
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +55,7 @@ class Whisper:
         beam_size: int = 1,
         no_speech_threshold: float = 0.6,
         hallucination_patterns: list[str] | None = None,
+        save_rejected: bool = True,
     ) -> None:
         self.language = language
         # 1 は貪欲法で最速。GPU なら 5 にしても余裕があり、精度が上がる
@@ -67,6 +70,11 @@ class Whisper:
         # モデルが自信を持って出すと確度では弾けないので、文字列でも見る。
         # ロボットに話しかける言葉として出る可能性が低いものだけを入れること。
         self.hallucination_patterns = list(hallucination_patterns or [])
+        # 弾いた区間の音声を残す。「たまに出る」を実際に聞いて確かめられるようにする。
+        # 幻聴なのか、テレビなどの本物の音声を正しく拾っただけなのかは、
+        # 音を聞かないと区別できない。
+        self.save_rejected = save_rejected
+        self.reject_dir = Path(__file__).resolve().parent.parent.parent / "recordings" / "rejected"
         # 固有名詞を先に見せておくと綴りが安定する。
         # これがないと「ウサちゃん」が「おさちゃん」になり、名前を呼んでも反応しない。
         self.initial_prompt = initial_prompt
@@ -117,6 +125,7 @@ class Whisper:
                     "幻聴とみなして破棄（確度）: %r (no_speech_prob=%.3f)",
                     text, seg.no_speech_prob,
                 )
+                self._dump_rejected(audio, text, "conf", seg.no_speech_prob)
                 continue
             hit = self._matches_hallucination(text)
             if hit is not None:
@@ -124,9 +133,31 @@ class Whisper:
                     "幻聴とみなして破棄（既知の文言 %r）: %r (no_speech_prob=%.3f)",
                     hit, text, seg.no_speech_prob,
                 )
+                self._dump_rejected(audio, text, "pattern", seg.no_speech_prob)
                 continue
             kept.append(seg.text)
         return "".join(kept).strip()
+
+    def _dump_rejected(self, audio: np.ndarray, text: str, reason: str, nsp: float) -> None:
+        """弾いた区間を WAV で残す。あとで聞いて原因を確かめるため。"""
+        if not self.save_rejected:
+            return
+        try:
+            self.reject_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+            path = self.reject_dir / f"{stamp}_{reason}_nsp{nsp:.2f}.wav"
+            pcm = np.clip(audio * 32767.0, -32768, 32767).astype(np.int16)
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(16000)
+                w.writeframes(pcm.tobytes())
+            path.with_suffix(".txt").write_text(
+                f"{text}\n(reason={reason}, no_speech_prob={nsp:.3f})\n", encoding="utf-8"
+            )
+            log.info("  → 音声を保存: %s", path.name)
+        except Exception as e:
+            log.debug("弾いた区間の保存に失敗: %s", e)
 
     def _matches_hallucination(self, text: str) -> str | None:
         """既知の幻聴に該当すればそのパターンを返す。"""

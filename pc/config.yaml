@@ -52,6 +52,10 @@ stt:
     - "チャンネル登録"
     - "ご覧いただきありがとう"  # 以上、チャンネルをご覧いただきありがとうございます
     - "エンディング"
+  # 弾いた区間の音声を recordings/rejected/ に残す。
+  # 幻聴なのか、テレビなどの本物の音声を拾っただけなのかは聞かないと分からない。
+  # 原因が分かったら false にしてよい
+  save_rejected: true
 
 llm:
   backend: "ollama"         # ollama / claude
