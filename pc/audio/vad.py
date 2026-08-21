@@ -36,6 +36,8 @@ class UtteranceSegmenter:
         threshold: float = 0.5,
         min_speech_ms: int = 250,
         hangover_ms: int = 400,
+        hangover_ms_short: int = 800,
+        short_utterance_ms: int = 1200,
         max_utterance_sec: float = 15.0,
         on_speech_start: Callable[[], None] | None = None,
     ) -> None:
@@ -48,7 +50,14 @@ class UtteranceSegmenter:
         fs = mic.frame_samples
         self.frame_ms = 1000.0 * fs / sr
         self.min_speech_frames = max(1, int(min_speech_ms / self.frame_ms))
+        # 「間」の扱い。短い hangover だと、名前を呼んだあとの自然な間で
+        # 発話が割れる（実測: 300ms の間で分断された）。断片を渡された
+        # whisper は認識を崩し、末尾の断片では幻聴まで出す。
+        # かといって一律に伸ばすと全ターンのレイテンシが増えるので、
+        # 発話がまだ短いあいだだけ長く待つ。
         self.hangover_frames = max(1, int(hangover_ms / self.frame_ms))
+        self.hangover_frames_short = max(1, int(hangover_ms_short / self.frame_ms))
+        self.short_utterance_frames = max(1, int(short_utterance_ms / self.frame_ms))
         self.max_frames = int(max_utterance_sec * 1000 / self.frame_ms)
         self.preroll_frames = max(1, int(PREROLL_MS / self.frame_ms))
 
@@ -93,8 +102,15 @@ class UtteranceSegmenter:
             speech.append(frame)
             silence_run = 0 if voiced else silence_run + 1
 
+            # ここまでの有音長で待ち時間を決める。まだ短ければ続きを待つ
+            voiced_so_far = len(speech) - silence_run
+            hangover = (
+                self.hangover_frames_short
+                if voiced_so_far < self.short_utterance_frames
+                else self.hangover_frames
+            )
             too_long = len(speech) >= self.max_frames
-            ended = silence_run >= self.hangover_frames
+            ended = silence_run >= hangover
 
             if ended or too_long:
                 in_speech = False
