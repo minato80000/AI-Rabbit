@@ -31,6 +31,11 @@ TAG_TO_EMOTION = {
     "普": Emotion.NEUTRAL,
 }
 
+# 逆引き。会話履歴にタグ付きで残すために使う。
+# タグを剥がした文だけを履歴に入れると、モデルが「自分は普段タグを付けない」と
+# 学習してしまい、数ターンで付けなくなる。
+EMOTION_TO_TAG = {v: k for k, v in TAG_TO_EMOTION.items()}
+
 
 class StateMachine:
     """状態と感情を持ち、変化したら購読者に通知する。"""

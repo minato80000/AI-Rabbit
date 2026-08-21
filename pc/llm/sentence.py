@@ -17,12 +17,13 @@ _SENT_END = "。！？!?"
 
 # 読み上げに乗せると事故る文字。モデルが Markdown や記号を混ぜてくることがある
 _TTS_STRIP = re.compile("[" + re.escape("*_`~#|<>[]{}\\") + "]+")
-_TTS_SPACE = re.compile(r"[ 	]{2,}")
+_TTS_SPACE = re.compile(r"\s+")
 
 
 def sanitize_for_tts(text: str) -> str:
     """TTS に渡す前に読み上げ不能な記号を落とす。"""
     text = _TTS_STRIP.sub("", text)
+    # 改行もふくめて空白は1つに畳む。読み上げ文に改行が残ると間が不自然になる
     text = _TTS_SPACE.sub(" ", text)
     return text.strip()
 _THINK_OPEN = "<think>"
@@ -115,9 +116,21 @@ class SentenceStreamer:
         while True:
             cut = -1
             for i, ch in enumerate(self.pending):
-                if ch in _SENT_END:
+                # 改行はモデルが文の区切りとして使う。句点と同じ扱いにする
+                if ch in _SENT_END or ch == "\n":
                     cut = i + 1
+                    # 「えっ！？」のように終端が連続する場合はまとめて切る。
+                    # 1文字ずつ切ると「？」だけの断片が TTS に流れてしまう
+                    while cut < len(self.pending) and (
+                        self.pending[cut] in _SENT_END or self.pending[cut] == "\n"
+                    ):
+                        cut += 1
                     break
+
+            # 終端がバッファ末尾に来た場合、次が「？」かもしれないので1つ待つ。
+            # ストリーミングでは「えっ！」の時点で「？」がまだ届いていない
+            if cut == len(self.pending) and not final:
+                break
 
             if cut < 0:
                 # 句点が来ないまま長くなったら読点で妥協する。

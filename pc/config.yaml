@@ -65,6 +65,8 @@ persona:
   # 存在すれば自動で読み込んでベースに追記する。
   # .gitignore と pre-commit フックの両方で保護されており、リポジトリには入らない。
   local_file: "persona/usachan.local.md"
+  # 出力フォーマットの規則。必ず最後に置かれる（小型モデルは後ろの指示ほど守る）
+  rules_file: "persona/rules.md"
 
 # CoreS3 との WebSocket 接続（audio.output が coreS3 または both のとき有効）
 transport:

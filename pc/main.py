@@ -22,7 +22,7 @@ from .audio.sink import NullSink, TeeSink
 from .audio.vad import UtteranceSegmenter
 from .llm import client as llm_client
 from .llm.sentence import SentenceStreamer
-from .state import Emotion, State, StateMachine
+from .state import EMOTION_TO_TAG, Emotion, State, StateMachine
 from .stt.whisper import Whisper
 from .transport.server import RabbitServer
 from .tts.voicevox import VoiceVox
@@ -56,30 +56,62 @@ def _strip_comments(text: str) -> str:
     return "".join(out).strip()
 
 
-def load_persona(cfg: dict) -> str:
-    """ペルソナを読む。
+def _read_layer(path, label: str) -> str:
+    """ペルソナの1層を読む。コメントに埋もれていないか点検する。"""
+    raw = path.read_text(encoding="utf-8")
+    body = _strip_comments(raw)
+    # コメントの中に本文を書いてしまうと、そこは丸ごと捨てられる。
+    # 実際にこれでセリフ例が全部消えたことがあるので、気づけるようにする。
+    stripped = len(raw) - len(body)
+    if stripped > 200 and len(body) < stripped / 3:
+        log.warning(
+            "%s: 中身の大半（%d 文字）が <!-- --> の中にあり、プロンプトに渡りません。"
+            "セリフはコメントの外に書いてください（渡っているのは %d 文字だけです）",
+            label, stripped, len(body),
+        )
+    return body
 
-    公開用のベースファイルに、ローカル専用ファイルがあれば追記する。
-    **原作のセリフなど公開したくない内容はローカル側に置く。**
-    ローカル側は .gitignore と pre-commit フックの両方で保護されており、
-    リポジトリには入らない。存在しなければベースだけで動く。
+
+def load_persona(cfg: dict) -> str:
+    """ペルソナを3層に分けて読む。
+
+        1. file        誰であるか（公開）
+        2. local_file  口調とセリフ例（非公開・原作由来）。無ければ飛ばす
+        3. rules_file  出力フォーマットの規則（公開）。必ず最後に置く
+
+    規則を最後に置くのは、小型モデルが前半の指示を忘れやすいため。
+    感情タグの付与率が目に見えて変わる。
     """
     pcfg = cfg["persona"]
+    parts: list[str] = []
+    loaded: list[str] = []
+
     base_path = ROOT / pcfg["file"]
-    parts = [_strip_comments(base_path.read_text(encoding="utf-8"))]
+    parts.append(_read_layer(base_path, base_path.name))
+    loaded.append(base_path.name)
 
     local_name = pcfg.get("local_file")
     if local_name:
         local_path = ROOT / local_name
         if local_path.exists():
-            parts.append(_strip_comments(local_path.read_text(encoding="utf-8")))
-            log.info("ペルソナ: %s + %s（ローカル専用）", base_path.name, local_path.name)
+            parts.append(_read_layer(local_path, local_path.name))
+            loaded.append(local_path.name + "（ローカル専用）")
         else:
             log.info(
-                "ペルソナ: %s のみ。%s を作るとセリフ例を追加できます（非公開）",
-                base_path.name, local_path.name,
+                "%s は未作成です。作るとセリフ例を追加できます（非公開）",
+                local_path.name,
             )
 
+    rules_name = pcfg.get("rules_file")
+    if rules_name:
+        rules_path = ROOT / rules_name
+        if rules_path.exists():
+            parts.append(_read_layer(rules_path, rules_path.name))
+            loaded.append(rules_path.name)
+        else:
+            log.warning("%s が見つかりません", rules_path)
+
+    log.info("ペルソナ: %s", " + ".join(loaded))
     return "\n\n".join(p for p in parts if p).strip()
 
 
@@ -185,6 +217,9 @@ class Rabbit:
         t0 = time.perf_counter()
         streamer = SentenceStreamer()
         spoken: list[str] = []
+        # 履歴用。感情タグを復元して残す（剥がしたまま残すと付けなくなる）
+        for_history: list[str] = []
+        last_emotion: Emotion | None = None
 
         # 第1文が揃った時刻と、実際に音が出はじめた時刻は別物。
         # 前者は LLM の速さ、後者は TTS 込みの体感レイテンシを表す。
@@ -192,10 +227,14 @@ class Rabbit:
         first_audio_at: float | None = None
 
         async def emit(text: str, emotion: Emotion) -> None:
-            nonlocal first_sentence_at, first_audio_at
+            nonlocal first_sentence_at, first_audio_at, last_emotion
             if first_sentence_at is None:
                 first_sentence_at = time.perf_counter()
             spoken.append(text)
+            if emotion is not last_emotion:
+                for_history.append(f"[{EMOTION_TO_TAG[emotion]}]")
+            for_history.append(text)
+            last_emotion = emotion
             await self._emit(text, emotion)
             if first_audio_at is None:
                 first_audio_at = time.perf_counter()
@@ -217,7 +256,7 @@ class Rabbit:
         self.state.set(State.IDLE)
 
         if spoken:
-            self.llm.record(query, "".join(spoken))
+            self.llm.record(query, "".join(for_history))
         if first_audio_at is not None and first_sentence_at is not None:
             log.info(
                 "第1文まで %.2fs / 初音出しまで %.2fs / 再生完了まで %.2fs",
