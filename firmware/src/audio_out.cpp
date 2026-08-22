@@ -25,6 +25,11 @@ bool AudioOut::begin() {
   auto cfg = M5.Speaker.config();
   cfg.sample_rate = AUDIO_SAMPLE_RATE;
   cfg.stereo = false;
+  // 既定のままだと DMA が浅く、Wi-Fi の到着ゆらぎで音が途切れる。
+  // 深くすると滑らかになるが、その分だけ barge-in の反応が鈍る
+  cfg.dma_buf_len = 512;
+  cfg.dma_buf_count = 16;
+  cfg.task_priority = 3;  // 描画より優先させる
   M5.Speaker.config(cfg);
   M5.Speaker.begin();
   M5.Speaker.setVolume(200);
@@ -47,7 +52,7 @@ void AudioOut::reset() {
 }
 
 void AudioOut::beginStream(uint32_t sample_rate) {
-  M5.Speaker.stop();
+  M5.Speaker.stop(SPEAKER_CHANNEL);
   reset();
   streaming_ = true;
   dropped_ = 0;
@@ -88,7 +93,7 @@ void AudioOut::endStream() {
 }
 
 void AudioOut::flush() {
-  M5.Speaker.stop();
+  M5.Speaker.stop(SPEAKER_CHANNEL);
   reset();
   streaming_ = false;
 }
@@ -110,15 +115,19 @@ void AudioOut::update() {
     // リングの折り返しをまたがないように切る
     if (tail_ + n > capacity_) n = capacity_ - tail_;
 
-    if (!M5.Speaker.playRaw(&buf_[tail_], n, sample_rate_, false, 1, -1, false)) {
-      break;  // スピーカー側のキューが一杯。次のループで送る
+    // チャンネルは固定する。-1（自動割り当て）にすると連続するチャンクが
+    // 別チャンネルに割り振られ、順番に鳴らず同時に重なって再生される。
+    // 細かく途切れて聞こえる原因になる。
+    if (!M5.Speaker.playRaw(&buf_[tail_], n, sample_rate_, false, 1,
+                            SPEAKER_CHANNEL, false)) {
+      break;  // このチャンネルのキューが一杯。次のループで送る
     }
     tail_ = (tail_ + n) % capacity_;
     have -= n;
     playing_ = true;
   }
 
-  if (available() == 0 && !M5.Speaker.isPlaying()) {
+  if (available() == 0 && !M5.Speaker.isPlaying(SPEAKER_CHANNEL)) {
     playing_ = false;
     level_ = 0.0f;
     started_ = false;

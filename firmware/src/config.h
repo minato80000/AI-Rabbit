@@ -32,13 +32,18 @@ static constexpr uint32_t AUDIO_SAMPLE_RATE = 24000;
 
 // 再生を始める前に溜める量。Wi-Fi のゆらぎを吸収する。
 // 長くすると途切れにくいが、barge-in で黙るまでが鈍くなる
-static constexpr uint32_t PREBUFFER_MS = 100;
+static constexpr uint32_t PREBUFFER_MS = 200;
 
 // リングバッファの容量。PSRAM に置く
 static constexpr uint32_t RINGBUFFER_MS = 1000;
 
 // 一度にスピーカーへ渡す量
 static constexpr size_t SPEAKER_CHUNK_SAMPLES = 512;
+
+// 鳴らすチャンネル。M5Unified は8つの仮想チャンネルを持ち、-1 を渡すと
+// 空いているものが自動で選ばれる。それだと連続するチャンクが別チャンネルに
+// 散らばって同時再生され、音が壊れる。1つに固定すること
+static constexpr int SPEAKER_CHANNEL = 0;
 
 // ---- センサ --------------------------------------------------------------
 // 同じ動きを何度も送らないための間隔
