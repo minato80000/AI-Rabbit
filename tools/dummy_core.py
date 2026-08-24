@@ -6,6 +6,7 @@ r"""CoreS3 の代わりをする WebSocket クライアント。
     .venv\Scripts\python tools\dummy_core.py
     .venv\Scripts\python tools\dummy_core.py --no-play --save out.wav
     .venv\Scripts\python tools\dummy_core.py --touch-after 5
+    .venv\Scripts\python tools\dummy_core.py --mic     マイク入力も代行する
 """
 from __future__ import annotations
 
@@ -33,6 +34,100 @@ FACES = {
 
 def face(state: str, emotion: str) -> str:
     return FACES.get((state, emotion), FACES.get((state, "neutral"), "( ･ω･ )"))
+
+
+class DummyMic:
+    """CoreS3 のマイクの代わりに PC のマイクを流す（--mic）。
+
+    実機が無くても PC 側の経路（RemoteMic → VAD → STT）を丸ごと試せる。
+    実機と同じ半二重にするため、mic の指示に従うだけでなく、鳴っている
+    あいだは自分で閉じる（ファームの mic_in と同じ振る舞い）。
+    """
+
+    def __init__(self, ws, loop, frame_samples: int = 512, device=None) -> None:
+        self.ws = ws
+        self.loop = loop
+        self.frame_samples = frame_samples
+        self.device = device
+        self.rate = 16000
+        self.wanted = False
+        self.stream = None
+        self.task: asyncio.Task | None = None
+        self.queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=64)
+        self.sent = 0
+
+    # --- PC からの指示 ---------------------------------------------------
+    def set_wanted(self, on: bool, rate: int) -> None:
+        self.wanted = on
+        if on:
+            self.open(rate)
+        else:
+            self.close()
+
+    def suspend(self) -> None:
+        """鳴っているあいだは閉じる。実機は I2S を明け渡すため。"""
+        self.close()
+
+    def resume(self) -> None:
+        if self.wanted:
+            self.open(self.rate)
+
+    # --- 実際の開閉 -------------------------------------------------------
+    def open(self, rate: int) -> None:
+        if self.stream is not None and rate == self.rate:
+            return
+        self.close()
+        import sounddevice as sd
+
+        self.rate = rate
+        self.stream = sd.InputStream(
+            samplerate=rate,
+            blocksize=self.frame_samples,
+            channels=1,
+            dtype="int16",
+            device=self.device,
+            callback=self._callback,
+        )
+        self.stream.start()
+        self.task = asyncio.create_task(self._sender())
+        print(f"  [mic] 開く {rate}Hz")
+
+    def close(self) -> None:
+        if self.stream is not None:
+            self.stream.stop()
+            self.stream.close()
+            self.stream = None
+            print(f"  [mic] 閉じる（送信 {self.sent} bytes）")
+            self.sent = 0
+        if self.task is not None:
+            self.task.cancel()
+            self.task = None
+        while not self.queue.empty():
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    # --- 受け渡し ---------------------------------------------------------
+    def _callback(self, indata, frames, time_info, status) -> None:  # 別スレッド
+        # sounddevice はこのバッファを使い回すので必ずコピーする
+        data = indata[:, 0].copy().tobytes()
+        try:
+            self.loop.call_soon_threadsafe(self._put, data)
+        except RuntimeError:
+            pass  # ループが閉じている
+
+    def _put(self, data: bytes) -> None:
+        try:
+            self.queue.put_nowait(data)
+        except asyncio.QueueFull:
+            pass  # 送りきれない分は捨てる（遅延を溜めない）
+
+    async def _sender(self) -> None:
+        while True:
+            data = await self.queue.get()
+            await self.ws.send(data)
+            self.sent += len(data)
 
 
 class DummyCore:
@@ -88,12 +183,18 @@ class DummyCore:
 async def run(args) -> int:
     url = f"ws://{args.host}:{args.port}{args.path}"
     core = DummyCore(play=not args.no_play, save=Path(args.save) if args.save else None)
+    mic: DummyMic | None = None
 
     print(f"[接続] {url}")
     try:
         async with websockets.connect(url, max_size=None) as ws:
             print("[接続] 成功")
-            await ws.send(json.dumps({"t": "hello", "fw": "dummy-0.1.0"}))
+            hello = {"t": "hello", "fw": "dummy-0.1.0"}
+            if args.mic:
+                hello["mic"] = True
+                mic = DummyMic(ws, asyncio.get_running_loop(),
+                               device=args.mic_device)
+            await ws.send(json.dumps(hello))
 
             if args.touch_after:
                 asyncio.create_task(_send_touch(ws, args.touch_after))
@@ -122,7 +223,15 @@ async def run(args) -> int:
                 if t == "state":
                     s, e = obj.get("v", "?"), obj.get("emotion", "?")
                     print(f"  [state] {s:9} / {e:9}  {face(s, e)}")
+                elif t == "mic":
+                    if mic is None:
+                        print(f"  [mic] 指示が来ましたが --mic 無しです: {obj}")
+                    else:
+                        mic.set_wanted(bool(obj.get("on")), int(obj.get("rate", 16000)))
                 elif t == "audio_begin":
+                    # 実機はここで I2S をスピーカーへ明け渡す
+                    if mic is not None:
+                        mic.suspend()
                     core.rate = obj.get("rate", 24000)
                     core.received = 0
                     core.begin_at = time.monotonic()
@@ -134,11 +243,15 @@ async def run(args) -> int:
                     print(f"  [audio] end   {core.received} bytes / 音声 {secs:.2f}s / 経過 {el:.2f}s")
                     core._close_stream()
                     await ws.send(json.dumps({"t": "audio_done"}))
+                    if mic is not None:
+                        mic.resume()
                 elif t == "audio_flush":
                     core.buf.clear()
                     core.received = 0
                     print("  [audio] flush（barge-in）")
                     core._close_stream()
+                    if mic is not None:
+                        mic.resume()
                 else:
                     print(f"  [その他] {obj}")
     except OSError as e:
@@ -149,6 +262,8 @@ async def run(args) -> int:
         print("[終了] サーバから切断されました")
     finally:
         core._close_stream()
+        if mic is not None:
+            mic.close()
     return 0
 
 
@@ -167,6 +282,9 @@ def main() -> int:
     ap.add_argument("--save", help="受信した音声を WAV に保存する")
     ap.add_argument("--touch-after", type=float, help="この秒数後に touch を送る")
     ap.add_argument("--timeout", type=float, help="この秒数で終了する")
+    ap.add_argument("--mic", action="store_true",
+                    help="PC のマイクを CoreS3 のマイクとして送る（実機なしで PC 側を試す）")
+    ap.add_argument("--mic-device", help="--mic で使う入力デバイス")
     args = ap.parse_args()
     try:
         return asyncio.run(run(args))

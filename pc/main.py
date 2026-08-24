@@ -18,6 +18,7 @@ import yaml
 
 from .audio.mic import Mic
 from .audio.player import Player
+from .audio.remote_mic import RemoteMic
 from .audio.sink import NullSink, TeeSink
 from .audio.vad import UtteranceSegmenter
 from .llm import client as llm_client
@@ -136,12 +137,19 @@ class Rabbit:
             raise ValueError(f"audio.output は local/coreS3/both のいずれか: {target!r}")
         self.output_target = target
 
+        # 音声の入力元。coreS3=ロボットのマイク（既定）/ local=PCのマイク
+        source = cfg["audio"].get("input", "local")
+        if source not in ("local", "coreS3"):
+            raise ValueError(f"audio.input は local/coreS3 のいずれか: {source!r}")
+        self.input_source = source
+
         self.player: Player | None = None
         if target in ("local", "both"):
             self.player = Player(sample_rate=24000, device=cfg["audio"]["output_device"])
 
         self.server: RabbitServer | None = None
-        if target in ("coreS3", "both"):
+        # 入力をロボットに任せる場合も、受け口としてサーバが要る
+        if target in ("coreS3", "both") or source == "coreS3":
             tcfg = cfg.get("transport", {})
             self.server = RabbitServer(
                 host=tcfg.get("host", "0.0.0.0"),
@@ -152,12 +160,17 @@ class Rabbit:
             )
             self.server.on_event(self._on_core_event)
 
-        self.sink = TeeSink(*(x for x in (self.player, self.server) if x is not None))
+        # サーバは入力の受け口としてだけ立っていることがある。そのときまで
+        # 音を流すと、output: local のつもりでウサギから声が出てしまう
+        sinks = [self.player] if self.player is not None else []
+        if self.server is not None and target in ("coreS3", "both"):
+            sinks.append(self.server)
+        self.sink = TeeSink(*sinks)
         if not self.sink.sinks:
             self.sink = NullSink()
 
         self.stt: Whisper | None = None
-        self.mic: Mic | None = None
+        self.mic: Mic | RemoteMic | None = None
         self.segmenter: UtteranceSegmenter | None = None
 
     def _on_state(self, state: State, emotion: Emotion) -> None:
@@ -170,6 +183,12 @@ class Rabbit:
         kind = ev.get("t")
         if kind == "hello":
             log.info("CoreS3 が接続しました (fw=%s)", ev.get("fw"))
+            if self.input_source == "coreS3" and not ev.get("mic"):
+                log.warning(
+                    "この機体はマイクを送ってきません。ファームが古い可能性が"
+                    "あります（firmware ディレクトリで pio run -t upload）。"
+                    "PC のマイクで進めるなら --pc-mic"
+                )
         elif kind in ("touch", "imu"):
             log.info("CoreS3 イベント: %s", ev)
         elif kind == "audio_done":
@@ -300,25 +319,44 @@ class Rabbit:
             await self.say(self.cfg["wake"]["greeting"])
         self.wake.touch()  # 応答にかかった時間ぶん会話ウィンドウを延ばす
 
+    async def _wait_client(self) -> None:
+        """ロボットのマイクを使うときは、繋がるまで待たないと何も聞こえない。"""
+        if self.server is None or self.server.clients:
+            return
+        print("  CoreS3 の接続を待っています（Ctrl+C で中止）... ", end="", flush=True)
+        while self.server.clients == 0:
+            await asyncio.sleep(0.2)
+        print("接続しました")
+
     async def run(self) -> None:
         acfg = self.cfg["audio"]
-        self.mic = Mic(
-            asyncio.get_running_loop(),
-            sample_rate=acfg["sample_rate"],
-            frame_samples=acfg["frame_samples"],
-            device=acfg["input_device"],
-        )
+        if self.input_source == "coreS3":
+            # UtteranceSegmenter から見た形は Mic と同じなので、
+            # この行より下は入力元が変わっても何も変わらない
+            self.mic = RemoteMic(
+                self.server,
+                sample_rate=acfg["sample_rate"],
+                frame_samples=acfg["frame_samples"],
+                gain=float(acfg.get("input_gain", 1.0)),
+            )
+        else:
+            self.mic = Mic(
+                asyncio.get_running_loop(),
+                sample_rate=acfg["sample_rate"],
+                frame_samples=acfg["frame_samples"],
+                device=acfg["input_device"],
+            )
         self.segmenter = UtteranceSegmenter(self.mic, **self.cfg["vad"])
 
         if self.cfg["behavior"]["barge_in"]:
             log.warning(
-                "barge_in: true ですが Step 1 では未実装です（Step 5 で対応）。"
-                "PC のマイクとスピーカーが同じ部屋にあるため、有効化には"
-                "音響エコーの処理が必要です。"
+                "barge_in: true ですが、音声での割り込みは実装しません。"
+                "ロボットのマイクとスピーカーは同時に開けないため、喋っている"
+                "あいだは聞いていません（半二重）。割り込むならタッチか IMU を"
+                "使ってください（docs/core-mic.md）。"
             )
 
         await self.start_output()
-        self.mic.start()
 
         if self.server is not None:
             tcfg = self.cfg.get("transport", {})
@@ -327,9 +365,16 @@ class Rabbit:
                   f"{tcfg.get('path', '/rabbit')}")
             print("  （実機がなければ tools/dummy_core.py で代用できます）")
 
+        if self.input_source == "coreS3":
+            await self._wait_client()
+
+        self.mic.start()
+
         words = " / ".join(self.cfg["wake"]["words"])
         window = self.cfg["wake"]["conversation_window_sec"]
         print()
+        if self.input_source == "local":
+            print("  入力は PC のマイクです（--pc-mic）。")
         print(f"  待機中。「{words}」と呼びかけてください。")
         print(f"  会話が始まると {window:.0f} 秒間は呼びかけ不要です。")
         print("  終了は Ctrl+C。")
@@ -451,8 +496,11 @@ def main() -> int:
                     help="複数の話者で同じセリフを合成して聴き比べる（例: --sample-speakers 3,61,47）")
     ap.add_argument("--sample-text", help="聴き比べに使うセリフ（省略時はペルソナから生成）")
     ap.add_argument("--no-play", action="store_true", help="聴き比べで音を鳴らさず保存だけする")
+    ap.add_argument("--pc-mic", action="store_true",
+                    help="PC のマイクで聞く（audio.input を local に上書き）。"
+                         "ロボットの聞こえが怪しいときの切り分けに使う")
     ap.add_argument("--serve", action="store_true",
-                    help="CoreS3 への送信を有効にする（audio.output を both に上書き）")
+                    help="CoreS3 への送信を有効にする（audio.output が local のときだけ both に上書き）")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -469,7 +517,11 @@ def main() -> int:
         return 0
 
     cfg = load_config(args.config)
-    if args.serve:
+    if args.pc_mic:
+        cfg["audio"]["input"] = "local"
+    if args.serve and cfg["audio"].get("output", "local") == "local":
+        # --serve はサーバを有効にするだけ。設定で coreS3（ウサギだけ）を
+        # 選んでいるときに both へ戻さない
         cfg["audio"]["output"] = "both"
     try:
         if args.sample_speakers:

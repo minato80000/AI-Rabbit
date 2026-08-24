@@ -8,6 +8,7 @@
 #include "audio_out.h"
 #include "config.h"
 #include "face.h"
+#include "mic_in.h"
 
 Net net;
 
@@ -74,6 +75,7 @@ void Net::onEvent(int type, uint8_t* payload, size_t length) {
       JsonDocument doc;
       doc["t"] = "hello";
       doc["fw"] = FW_VERSION;
+      doc["mic"] = true;  // マイク入力を持つ機体だと伝える
       char out[128];
       serializeJson(doc, out, sizeof(out));
       ws.sendTXT(out);
@@ -83,6 +85,7 @@ void Net::onEvent(int type, uint8_t* payload, size_t length) {
       connected_ = false;
       face.setConnected(false);
       audio_out.flush();
+      mic_in.setWanted(false, 0);  // 送り先が居ないので録らない
       Serial.println("[net] PC から切断されました");
       break;
 
@@ -129,6 +132,11 @@ void Net::handleText(const char* text) {
     audio_out.flush();
     audio_done_pending_ = false;
 
+  } else if (strcmp(t, "mic") == 0) {
+    // PC がマイクを開かせにきた。実際に開くかは mic_in が決める
+    // （鳴っているあいだは I2S を空けられない）
+    mic_in.setWanted(doc["on"] | false, doc["rate"] | MIC_SAMPLE_RATE);
+
   } else {
     Serial.printf("[net] 未知のメッセージ: %s\n", t);
   }
@@ -159,4 +167,10 @@ void Net::sendImu(const char* event) {
 
 void Net::sendAudioDone() {
   sendJson("{\"t\":\"audio_done\"}");
+}
+
+void Net::sendMicFrame(const int16_t* data, size_t samples) {
+  if (!connected_) return;
+  // ESP32 はリトルエンディアンなので、そのまま s16le として読める
+  ws.sendBIN(reinterpret_cast<const uint8_t*>(data), samples * sizeof(int16_t));
 }

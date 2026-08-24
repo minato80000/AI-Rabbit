@@ -1,7 +1,8 @@
 #include "face.h"
 
-#include <M5Unified.h>
 #include <string.h>
+
+#include "config.h"
 
 Face face;
 
@@ -11,12 +12,22 @@ constexpr int kEyeDx = 62;
 constexpr int kEyeR = 22;
 constexpr int kMouthY = 170;
 
-uint16_t backgroundFor(Emotion e) {
+// 送り直す範囲。ここを外すと絵が残るので、描画を変えたら一緒に見直すこと。
+
+// 口が動く範囲。speaking の最大高さ（6 + 34 = 40）と happy の横幅（60）を含む
+constexpr int kMouthBoxW = 72;
+constexpr int kMouthBoxH = 52;
+
+// 目が変わる範囲。surprised の半径（22+5）と thinking の上ずらし（-8）を含む
+constexpr int kEyeBoxW = 192;
+constexpr int kEyeBoxH = 76;
+
+uint16_t backgroundFor(LovyanGFX& g, Emotion e) {
   switch (e) {
-    case Emotion::Happy:     return M5.Display.color565(20, 40, 28);
-    case Emotion::Puzzled:   return M5.Display.color565(38, 32, 20);
-    case Emotion::Surprised: return M5.Display.color565(38, 24, 24);
-    default:                 return M5.Display.color565(16, 20, 26);
+    case Emotion::Happy:     return g.color565(20, 40, 28);
+    case Emotion::Puzzled:   return g.color565(38, 32, 20);
+    case Emotion::Surprised: return g.color565(38, 24, 24);
+    default:                 return g.color565(16, 20, 26);
   }
 }
 }  // namespace
@@ -39,8 +50,25 @@ Emotion parseEmotion(const char* s) {
 
 void Face::begin() {
   M5.Display.setRotation(1);
-  M5.Display.setTextDatum(textdatum_t::top_left);
-  draw();
+
+  // PSRAM に置く。内蔵 RAM は WiFi と音声に残しておきたい。
+  // PSRAM のスプライトは DMA が効かないぶん送るのが遅いが、遅さが効くのは
+  // 全画面を送るときだけ。その全画面は state / emotion が変わったときに起き、
+  // そのときマイクは PC の指示で閉じているので、ちょうど噛み合っている。
+  canvas_.setPsram(true);
+  canvas_.setColorDepth(16);
+  use_sprite_ =
+      canvas_.createSprite(M5.Display.width(), M5.Display.height()) != nullptr;
+
+  if (use_sprite_) {
+    Serial.printf("[face] スプライト %dx%d (%u KB, PSRAM)\n",
+                  M5.Display.width(), M5.Display.height(),
+                  (unsigned)(M5.Display.width() * M5.Display.height() * 2 / 1024));
+  } else {
+    Serial.println("[face] スプライトを確保できません。画面へ直接描きます（ちらつきます）");
+  }
+
+  present(true, true, true);
 }
 
 void Face::set(RobotState state, Emotion emotion) {
@@ -58,9 +86,19 @@ void Face::setConnected(bool connected) {
   connected_ = connected;
 }
 
+void Face::setMode(DisplayMode mode) {
+  mode_ = mode;
+}
+
+DisplayMode Face::toggleMode() {
+  mode_ = (mode_ == DisplayMode::Dev) ? DisplayMode::Product : DisplayMode::Dev;
+  return mode_;
+}
+
 void Face::update() {
+  const uint32_t now = millis();
+
   // まばたき。待機中だけ
-  uint32_t now = millis();
   if (state_ == RobotState::Idle || state_ == RobotState::Listening) {
     if (!blinking_ && now - last_blink_ms_ > 3800) {
       blinking_ = true;
@@ -73,68 +111,126 @@ void Face::update() {
     blinking_ = false;
   }
 
-  int mouth_step = (int)(mouth_ * 5.0f);
-  bool changed = state_ != drawn_state_ || emotion_ != drawn_emotion_ ||
-                 connected_ != drawn_connected_ || mouth_step != drawn_mouth_;
-  static bool drawn_blink = false;
-  if (blinking_ != drawn_blink) {
-    changed = true;
-    drawn_blink = blinking_;
-  }
-  if (!changed) return;
+  const int mouth_step = (int)(mouth_ * 5.0f);
+  const bool big = state_ != drawn_state_ || emotion_ != drawn_emotion_ ||
+                   connected_ != drawn_connected_ || mode_ != drawn_mode_;
+  const bool mouth_changed = mouth_step != drawn_mouth_;
+  const bool blink_changed = blinking_ != drawn_blink_;
+  if (!big && !mouth_changed && !blink_changed) return;
+
+  // 口とまばたきは送りすぎを抑える。state / emotion の変化は待たせない
+  // （待たせると反応が鈍く見える）
+  if (!big && (now - last_push_ms_) < FACE_MIN_FRAME_MS) return;
 
   drawn_state_ = state_;
   drawn_emotion_ = emotion_;
   drawn_connected_ = connected_;
+  drawn_mode_ = mode_;
   drawn_mouth_ = mouth_step;
-  draw();
+  drawn_blink_ = blinking_;
+
+  present(big, mouth_changed, blink_changed);
 }
 
-void Face::draw() {
-  auto& d = M5.Display;
-  const int cx = d.width() / 2;
+void Face::present(bool full, bool mouth, bool eyes) {
+  const uint32_t t0 = millis();
+  const int cx = M5.Display.width() / 2;
 
-  d.fillScreen(backgroundFor(emotion_));
+  if (!use_sprite_) {
+    // 確保できなかったときの保険。ちらつくが、何も映らないよりはよい
+    render(M5.Display);
+  } else {
+    render(canvas_);
+    if (full) {
+      flush(0, 0, M5.Display.width(), M5.Display.height());
+    } else {
+      if (mouth) {
+        flush(cx - kMouthBoxW / 2, kMouthY - kMouthBoxH / 2, kMouthBoxW, kMouthBoxH);
+      }
+      if (eyes) {
+        flush(cx - kEyeBoxW / 2, kEyeY - kEyeBoxH / 2, kEyeBoxW, kEyeBoxH);
+      }
+    }
+  }
+
+  last_push_ms_ = millis();
+
+  // 描画が長引くとマイクの録音バッファを積み直せず、音が欠ける。
+  // 気づけるように出しておく（毎回出すとシリアルが埋まるので間引く）
+  const uint32_t took = last_push_ms_ - t0;
+  if (took >= FACE_SLOW_FRAME_MS) {
+    ++slow_frames_;
+    if ((slow_frames_ & 31) == 1) {
+      Serial.printf("[face] 描画に %ums かかりました（累計 %u 回）。"
+                    "マイクの猶予は 64ms です\n",
+                    (unsigned)took, (unsigned)slow_frames_);
+    }
+  }
+}
+
+void Face::flush(int x, int y, int w, int h) {
+  // クリップを掛けてから送ると、LovyanGFX は範囲内の画素だけを転送する
+  // （LGFXBase::pushImage が clip で切ってから writeImage を呼ぶ）。
+  // 全画面 150KB を毎回送らずに済むのはこのため。
+  M5.Display.setClipRect(x, y, w, h);
+  canvas_.pushSprite(&M5.Display, 0, 0);
+  M5.Display.clearClipRect();
+}
+
+void Face::render(LovyanGFX& g) {
+  const int cx = g.width() / 2;
+
+  g.fillScreen(backgroundFor(g, emotion_));
 
   // ---- 目 ----
   const uint16_t eye = TFT_WHITE;
   if (blinking_) {
-    d.fillRoundRect(cx - kEyeDx - kEyeR, kEyeY - 3, kEyeR * 2, 6, 3, eye);
-    d.fillRoundRect(cx + kEyeDx - kEyeR, kEyeY - 3, kEyeR * 2, 6, 3, eye);
+    g.fillRoundRect(cx - kEyeDx - kEyeR, kEyeY - 3, kEyeR * 2, 6, 3, eye);
+    g.fillRoundRect(cx + kEyeDx - kEyeR, kEyeY - 3, kEyeR * 2, 6, 3, eye);
   } else if (state_ == RobotState::Thinking) {
     // 考えているときは視線を上へ
-    d.fillCircle(cx - kEyeDx, kEyeY - 8, kEyeR, eye);
-    d.fillCircle(cx + kEyeDx, kEyeY - 8, kEyeR, eye);
-    d.fillCircle(cx - kEyeDx, kEyeY - 14, 8, TFT_BLACK);
-    d.fillCircle(cx + kEyeDx, kEyeY - 14, 8, TFT_BLACK);
+    g.fillCircle(cx - kEyeDx, kEyeY - 8, kEyeR, eye);
+    g.fillCircle(cx + kEyeDx, kEyeY - 8, kEyeR, eye);
+    g.fillCircle(cx - kEyeDx, kEyeY - 14, 8, TFT_BLACK);
+    g.fillCircle(cx + kEyeDx, kEyeY - 14, 8, TFT_BLACK);
   } else if (emotion_ == Emotion::Surprised) {
-    d.fillCircle(cx - kEyeDx, kEyeY, kEyeR + 5, eye);
-    d.fillCircle(cx + kEyeDx, kEyeY, kEyeR + 5, eye);
-    d.fillCircle(cx - kEyeDx, kEyeY, 9, TFT_BLACK);
-    d.fillCircle(cx + kEyeDx, kEyeY, 9, TFT_BLACK);
+    g.fillCircle(cx - kEyeDx, kEyeY, kEyeR + 5, eye);
+    g.fillCircle(cx + kEyeDx, kEyeY, kEyeR + 5, eye);
+    g.fillCircle(cx - kEyeDx, kEyeY, 9, TFT_BLACK);
+    g.fillCircle(cx + kEyeDx, kEyeY, 9, TFT_BLACK);
   } else {
-    d.fillCircle(cx - kEyeDx, kEyeY, kEyeR, eye);
-    d.fillCircle(cx + kEyeDx, kEyeY, kEyeR, eye);
-    d.fillCircle(cx - kEyeDx, kEyeY + 4, 9, TFT_BLACK);
-    d.fillCircle(cx + kEyeDx, kEyeY + 4, 9, TFT_BLACK);
+    g.fillCircle(cx - kEyeDx, kEyeY, kEyeR, eye);
+    g.fillCircle(cx + kEyeDx, kEyeY, kEyeR, eye);
+    g.fillCircle(cx - kEyeDx, kEyeY + 4, 9, TFT_BLACK);
+    g.fillCircle(cx + kEyeDx, kEyeY + 4, 9, TFT_BLACK);
   }
 
   // ---- 口 ----
-  const uint16_t mouth = M5.Display.color565(240, 150, 170);
+  const uint16_t mouth = g.color565(240, 150, 170);
   if (state_ == RobotState::Speaking) {
     int h = 6 + (int)(mouth_ * 34.0f);
-    d.fillRoundRect(cx - 26, kMouthY - h / 2, 52, h, 8, mouth);
+    g.fillRoundRect(cx - 26, kMouthY - h / 2, 52, h, 8, mouth);
   } else if (emotion_ == Emotion::Happy) {
-    d.fillRoundRect(cx - 30, kMouthY - 4, 60, 10, 5, mouth);
+    g.fillRoundRect(cx - 30, kMouthY - 4, 60, 10, 5, mouth);
   } else if (emotion_ == Emotion::Puzzled) {
-    d.fillRoundRect(cx - 18, kMouthY, 36, 7, 3, mouth);
+    g.fillRoundRect(cx - 18, kMouthY, 36, 7, 3, mouth);
   } else {
-    d.fillRoundRect(cx - 22, kMouthY - 3, 44, 7, 3, mouth);
+    g.fillRoundRect(cx - 22, kMouthY - 3, 44, 7, 3, mouth);
   }
 
-  // ---- 状態の表示（開発中の確認用。Step 4 で消す） ----
-  d.setTextColor(M5.Display.color565(120, 130, 140));
-  d.setTextSize(1);
+  // ---- ここから下は開発モードだけ ----
+  if (mode_ != DisplayMode::Dev) {
+    // 製品モードでは文字を出さない。ただし繋がっていないことが
+    // まったく分からないと困るので、隅に小さく印だけ残す
+    if (!connected_) {
+      g.fillCircle(g.width() - 9, 9, 3, g.color565(230, 140, 90));
+    }
+    return;
+  }
+
+  g.setTextSize(1);
+  g.setTextDatum(textdatum_t::top_left);
+  g.setTextColor(g.color565(120, 130, 140));
   const char* label = "idle";
   switch (state_) {
     case RobotState::Listening: label = "listening"; break;
@@ -142,9 +238,17 @@ void Face::draw() {
     case RobotState::Speaking:  label = "speaking";  break;
     default: break;
   }
-  d.drawString(label, 6, 6);
+  g.drawString(label, 6, 6);
   if (!connected_) {
-    d.setTextColor(M5.Display.color565(230, 140, 90));
-    d.drawString("PC not connected", 6, 20);
+    g.setTextColor(g.color565(230, 140, 90));
+    g.drawString("PC not connected", 6, 20);
   }
+
+  // 切り替えられることが分かるように出しておく。ボタンは画面の外
+  // （下の見えない帯）にあるので、場所ではなく文で示す。
+  // 製品モードでは消えるが、同じ場所を触れば戻ってこられる
+  g.setTextDatum(textdatum_t::bottom_center);
+  g.setTextColor(g.color565(96, 106, 116));
+  g.drawString("DEV - tap below the screen", cx, g.height() - 3);
+  g.setTextDatum(textdatum_t::top_left);
 }

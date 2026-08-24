@@ -58,7 +58,74 @@ def record(seconds: float, sample_rate: int, device) -> np.ndarray:
     return buf[:, 0].copy()
 
 
-def report_levels(audio: np.ndarray, sample_rate: int) -> None:
+async def record_remote(cfg: dict, seconds: float) -> np.ndarray:
+    """ロボットのマイクで録る。対話で実際に使う経路と同じ音を測る。"""
+    from .audio.remote_mic import RemoteMic
+    from .transport.server import RabbitServer
+
+    acfg = cfg["audio"]
+    tcfg = cfg.get("transport", {})
+    server = RabbitServer(
+        host=tcfg.get("host", "0.0.0.0"),
+        port=tcfg.get("port", 8765),
+        path=tcfg.get("path", "/rabbit"),
+        sample_rate=24000,
+        chunk_ms=tcfg.get("chunk_ms", 20),
+    )
+    try:
+        await server.start()
+    except OSError as e:
+        raise SystemExit(
+            f"  ポート {tcfg.get('port', 8765)} を開けません（{e}）。\n\n"
+            f"  対話ループ（python -m pc.main）が動いていませんか。\n"
+            f"  同じポートは1つのプロセスしか使えないので、止めてから実行してください。"
+        )
+
+    mic = RemoteMic(
+        server,
+        sample_rate=acfg["sample_rate"],
+        frame_samples=acfg["frame_samples"],
+        gain=float(acfg.get("input_gain", 1.0)),
+    )
+    try:
+        if server.clients == 0:
+            print("  CoreS3 の接続を待っています（Ctrl+C で中止）... ", end="", flush=True)
+            while server.clients == 0:
+                await asyncio.sleep(0.2)
+            print("接続しました")
+        mic.start()
+
+        print(f"  録音します（{seconds:.0f}秒）。"
+              f"「ウサちゃん、今日はいい天気だね」のように話しかけてください。")
+        for i in (3, 2, 1):
+            print(f"    {i}...", flush=True)
+            await asyncio.sleep(1)
+        # 開いた直後とカウントダウン中に溜まった分は捨てる
+        while not mic.queue.empty():
+            mic.queue.get_nowait()
+        print("  >>> どうぞ <<<", flush=True)
+
+        need = int(seconds * acfg["sample_rate"])
+        frames: list[np.ndarray] = []
+        got = 0
+        while got < need:
+            try:
+                f = await asyncio.wait_for(mic.queue.get(), timeout=10.0)
+            except asyncio.TimeoutError:
+                raise SystemExit(
+                    "  ロボットから音が届かなくなりました。\n"
+                    "  シリアル（pio device monitor）に [mic] のログが出ているか確認してください。"
+                )
+            frames.append(f)
+            got += len(f)
+        print("  録音終了")
+        return np.concatenate(frames)[:need]
+    finally:
+        mic.stop()
+        await server.stop()
+
+
+def report_levels(audio: np.ndarray, sample_rate: int, source: str = "local") -> None:
     peak = float(np.max(np.abs(audio)))
     rms = float(np.sqrt(np.mean(audio ** 2)))
     clipped = int(np.sum(np.abs(audio) >= 0.999))
@@ -84,14 +151,22 @@ def report_levels(audio: np.ndarray, sample_rate: int) -> None:
     print()
     print("  === 判定 ===")
     ok = True
+    louder = (
+        "firmware/src/config.h の MIC_MAGNIFICATION を上げる"
+        if source == "coreS3" else "Windows のマイク音量を上げる"
+    )
     if peak < 0.03:
-        print("    NG マイクの音が非常に小さい。Windows のマイク音量を上げるか、近づいて話してください")
+        print(f"    NG マイクの音が非常に小さい。{louder}か、近づいて話してください")
         ok = False
     elif peak < 0.1:
-        print("    △  音が小さめ。マイク音量を上げると認識が改善する可能性があります")
+        print(f"    △  音が小さめ。{louder}と認識が改善する可能性があります")
         ok = False
     if clipped > 10:
-        print("    NG 音が割れている（クリップ）。マイク音量を下げてください")
+        quieter = (
+            "MIC_MAGNIFICATION（と audio.input_gain）を下げてください"
+            if source == "coreS3" else "マイク音量を下げてください"
+        )
+        print(f"    NG 音が割れている（クリップ）。{quieter}")
         ok = False
     if snr < 15:
         print(f"    △  SNR {snr:.0f}dB は低め。周囲の騒音が多いか、マイクが遠い可能性があります")
@@ -165,20 +240,25 @@ def load_wav(path: Path, sample_rate: int) -> np.ndarray:
 async def check_mic(cfg: dict, seconds: float = 6.0, wav: Path | None = None) -> None:
     sr = cfg["audio"]["sample_rate"]
     device = cfg["audio"]["input_device"]
+    source = cfg["audio"].get("input", "coreS3")
 
     if wav is not None:
         print("=== 録音ファイルの解析 ===")
         print(f"  ファイル: {wav}")
         audio = load_wav(wav, sr)
         path = wav
-        report_levels(audio, sr)
+        report_levels(audio, sr, source)
     else:
         print("=== マイク診断 ===")
-        print(f"  入力デバイス: {device if device is not None else '(既定)'}")
+        if source == "coreS3":
+            print("  入力: ロボットのマイク（CoreS3）")
+        else:
+            print(f"  入力: PC のマイク / デバイス {device if device is not None else '(既定)'}")
         print(f"  サンプルレート: {sr} Hz")
         print()
-        audio = record(seconds, sr, device)
-        report_levels(audio, sr)
+        audio = (await record_remote(cfg, seconds) if source == "coreS3"
+                 else record(seconds, sr, device))
+        report_levels(audio, sr, source)
         path = save_wav(audio, sr)
         print()
         print(f"  録音を保存: {path}")

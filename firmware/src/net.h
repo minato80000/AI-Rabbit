@@ -23,6 +23,9 @@ class Net {
   // 鳴らし終わったことを伝える。PC 側はこれが来ない場合の推定も持っている
   void sendAudioDone();
 
+  // マイクで拾った PCM をそのまま PC へ流す。s16le mono
+  void sendMicFrame(const int16_t* data, size_t samples);
+
  private:
   void connectWifi();
   void onEvent(int type, uint8_t* payload, size_t length);

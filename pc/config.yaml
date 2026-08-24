@@ -16,8 +16,16 @@ audio:
   input_device: null        # null = OS のデフォルト
   output_device: null
   # 音声の出力先。local=PCのスピーカー / coreS3=ウサギ / both=両方
-  # Step 1 は local。CoreS3 のファームができたら coreS3 か both にする
-  output: "local"
+  # 実機が繋がったので coreS3。手元でも聴きたいときだけ both に戻す
+  output: "coreS3"
+  # 音声の入力元。coreS3=ロボットのマイク / local=PCのマイク
+  # ロボットのマイクとスピーカーは I2S を共有していて同時に開けないため、
+  # 喋っている間は耳が塞がる（半二重）。詳細は docs/core-mic.md。
+  # ロボットの聞こえが怪しいときは local にすると切り分けられる（--pc-mic）
+  input: "coreS3"
+  # ロボットのマイクが遠くて音が小さいときだけ上げる（input: coreS3 用）。
+  # まず firmware/src/config.h の MIC_MAGNIFICATION を上げるほうが素性がよい
+  input_gain: 1.0
   sample_rate: 16000        # VAD / STT が 16kHz を要求するので固定
   frame_samples: 512        # Silero VAD v5 は 16kHz で 512 サンプル固定
 
@@ -98,9 +106,10 @@ transport:
   wait_client_sec: 0        # --text 実行時に接続を待つ秒数（0 で待たない）
 
 behavior:
-  # PC のマイクと PC のスピーカーが同じ部屋にあるため、Step 1 では
-  # 再生中にマイクを閉じる（自分の声を拾って自分に割り込むのを防ぐ）。
-  # 詳細は docs/dialogue-system.md の「barge-in と音響エコー」を参照。
+  # 音声での割り込みは実装しない。ロボットのマイクとスピーカーは I2S を
+  # 共有していて同時に開けないため、喋っている間は聞いていない（半二重）。
+  # 割り込みが要るならタッチか IMU を使う。
+  # 詳細は docs/dialogue-system.md の「音響エコーと barge-in」を参照。
   barge_in: false
 
 debug:

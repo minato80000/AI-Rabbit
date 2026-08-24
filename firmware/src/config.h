@@ -45,6 +45,58 @@ static constexpr size_t SPEAKER_CHUNK_SAMPLES = 512;
 // 散らばって同時再生され、音が壊れる。1つに固定すること
 static constexpr int SPEAKER_CHANNEL = 0;
 
+// ---- マイク --------------------------------------------------------------
+// この機体のマイクで聞く。マイクとスピーカーは I2S1 と BCK/WS ピンを共有して
+// いて同時には開けない（M5Unified の CoreS3 定義でどちらも
+// i2s_port=I2S_NUM_1 / bck=GPIO34）ので、喋る間は耳を閉じる半二重で切り替える。
+// 詳細は docs/core-mic.md。
+//
+// PC 側 (pc/config.yaml の audio.sample_rate) と合わせること
+static constexpr uint32_t MIC_SAMPLE_RATE = 16000;
+
+// 一度に送るサンプル数。16kHz なら 512 = 32ms で、PC 側の VAD の
+// 1フレームとちょうど同じ長さになる（frame_samples: 512）
+static constexpr size_t MIC_FRAME_SAMPLES = 512;
+
+// 録音バッファの枚数。M5Unified は2枚まで先行して録れるので、
+// 送信中の1枚を守るには3枚要る（詳細は mic_in.cpp）
+static constexpr size_t MIC_BUFFERS = 3;
+
+// 入力の増幅。M5Unified の CoreS3 既定は 2。
+// PC 側で --check-mic を見て、音が小さければここを上げる
+static constexpr uint8_t MIC_MAGNIFICATION = 4;
+
+// マイクを開いた直後は値が安定しないので、この間のフレームは捨てる
+static constexpr uint32_t MIC_WARMUP_MS = 120;
+
+// 開けなかったときに毎ループ試さないための間隔
+static constexpr uint32_t MIC_RETRY_MS = 1000;
+
+// ---- 画面 ----------------------------------------------------------------
+// 顔はスプライトに描いてから画面へ送る（face.cpp）。全画面は
+// 320x240x2 = 150KB あり、SPI 40MHz でも 30ms 以上かかる。
+// マイクの録音バッファを積み直す猶予は 64ms しかないので、
+// 変わった場所だけを送る。
+
+// 口やまばたきの更新をこの間隔で頭打ちにする。
+// state / emotion の変化は待たずに即座に描く
+static constexpr uint32_t FACE_MIN_FRAME_MS = 33;  // 約 30fps
+
+// 1フレームがこれを超えたらシリアルに出す。
+// マイクの猶予を食い潰しているサインなので、出るなら描画を減らすこと
+static constexpr uint32_t FACE_SLOW_FRAME_MS = 40;
+
+// 画面の下端を「ボタン扱い」に広げる量。**0 のまま使う。**
+//
+// CoreS3 に押しボタンは無いが、タッチ面は画面より下まで続いていて、その
+// 見えない帯が BtnA / BtnB / BtnC（左・中央・右）になっている。
+// M5Unified はこの値を「画面の下端から何 px をボタン側に広げるか」として
+// 使うので、0 なら画面の外だけ、40 にすると顔の下 40px を触っても
+// ボタンが押されてしまう。
+//
+// 中央の 1/3 が BtnB で、開発モードと製品モードの切り替えに使う。
+static constexpr uint16_t TOUCH_BUTTON_HEIGHT = 0;
+
 // ---- センサ --------------------------------------------------------------
 // 同じ動きを何度も送らないための間隔
 static constexpr uint32_t TOUCH_MIN_INTERVAL_MS = 400;

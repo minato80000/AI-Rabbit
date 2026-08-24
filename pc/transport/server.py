@@ -9,12 +9,17 @@ PC -> CoreS3
     binary PCM チャンク（20ms 単位）
     text   {"t":"audio_end"}
     text   {"t":"audio_flush"}   barge-in。バッファ即破棄
+    text   {"t":"mic","on":true|false,"rate":16000}   マイクの開閉
 
 CoreS3 -> PC
-    text   {"t":"hello","fw":"0.1.0"}
+    text   {"t":"hello","fw":"0.1.0","mic":true}
     text   {"t":"touch","x":..,"y":..}
     text   {"t":"imu","event":"lift|shake|pat"}
     text   {"t":"audio_done"}    再生し終わった（任意。無くても推定で動く）
+    binary PCM チャンク（マイク入力。s16le mono / rate は mic で指定した値）
+
+マイクとスピーカーは I2S を共有していて同時に開けないので、開閉の指示は
+出すが、実際に開くかは CoreS3 が決める。docs/core-mic.md を参照。
 """
 from __future__ import annotations
 
@@ -57,6 +62,9 @@ class RabbitServer:
         self._outq: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         self._sender_task: asyncio.Task | None = None
         self._event_cb: Callable[[dict], None] | None = None
+        # CoreS3 のマイクを入力に使うときだけ差さる
+        self._audio_cb: Callable[[bytes], None] | None = None
+        self._last_mic: dict | None = None
 
         # 再生終了の推定。CoreS3 から audio_done が来ればそれで上書きする
         self._play_until = 0.0
@@ -83,6 +91,13 @@ class RabbitServer:
     def on_event(self, cb: Callable[[dict], None]) -> None:
         self._event_cb = cb
 
+    def on_audio(self, cb: Callable[[bytes], None] | None) -> None:
+        """CoreS3 から届く音声の受け口。
+
+        None を渡すと元どおり無視する。
+        """
+        self._audio_cb = cb
+
     @property
     def clients(self) -> int:
         return len(self._clients)
@@ -98,17 +113,23 @@ class RabbitServer:
         self._clients.add(ws)
         log.info("CoreS3 接続: %s (計 %d 台)", peer, len(self._clients))
 
-        # 接続直後に現在の状態を送って顔を合わせる
-        if self._last_state is not None:
+        # 接続直後に現在の状態を送って顔を合わせる。
+        # マイクの指示も送り直す（繋がる前に出した指示は届いていない）
+        for msg in (self._last_state, self._last_mic):
+            if msg is None:
+                continue
             try:
-                await ws.send(json.dumps(self._last_state, ensure_ascii=False))
+                await ws.send(json.dumps(msg, ensure_ascii=False))
             except Exception:
                 pass
 
         try:
             async for msg in ws:
                 if isinstance(msg, bytes):
-                    log.debug("クライアントからのバイナリは未使用 (%d bytes)", len(msg))
+                    if self._audio_cb is not None:
+                        self._audio_cb(msg)
+                    else:
+                        log.debug("クライアントからのバイナリは未使用 (%d bytes)", len(msg))
                     continue
                 self._on_message(msg)
         except websockets.ConnectionClosed:
@@ -158,6 +179,18 @@ class RabbitServer:
     def push_state(self, state: str, emotion: str) -> None:
         msg = {"t": "state", "v": state, "emotion": emotion}
         self._last_state = msg
+        self._put("text", msg)
+
+    # --- マイク ----------------------------------------------------------
+    def set_mic(self, on: bool, rate: int = 16000) -> None:
+        """CoreS3 のマイクを開かせる／閉じさせる。
+
+        マイクとスピーカーは I2S を共有していて同時に開けないので、
+        こちらが喋る前には必ず閉じさせる必要がある。
+        最後の指示は覚えておき、接続時に送り直す。
+        """
+        msg = {"t": "mic", "on": bool(on), "rate": int(rate)}
+        self._last_mic = msg
         self._put("text", msg)
 
     # --- AudioSink -------------------------------------------------------

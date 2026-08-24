@@ -1,7 +1,10 @@
-# PC 母艦側（Step 1）
+# PC 母艦側
 
 話しかけると、ウサちゃんロボが VOICEVOX の声で返事をします。
-Step 1 ではマイクもスピーカーも PC を使います（CoreS3 はまだ不要）。
+**聞くのも喋るのもロボット本体**で、PC は音声認識・LLM・音声合成を担います。
+
+CoreS3 が無くても、`tools/dummy_core.py` が代わりになります
+（下の「CoreS3 の代わりに動かす」）。
 
 ## 必要なもの
 
@@ -33,8 +36,11 @@ git config core.hooksPath tools/hooks
 ## 起動
 
 ```powershell
-# 通常起動（マイクで話しかける）
+# 通常起動（ロボットに話しかける）
 .venv\Scripts\python -m pc.main
+
+# PC のマイクで聞く（ロボットの聞こえが怪しいときの切り分け）
+.venv\Scripts\python -m pc.main --pc-mic
 
 # マイクを使わずに LLM + 音声合成だけ試す
 .venv\Scripts\python -m pc.main --text "こんにちは"
@@ -150,7 +156,7 @@ tts:
   intonation: 1.0    # 抑揚。上げると感情的になる
 ```
 
-## CoreS3 への送信（Step 2）
+## CoreS3 の代わりに動かす
 
 CoreS3 の実機がなくても、ダミークライアントでプロトコルと音声転送を試せます。
 
@@ -160,14 +166,17 @@ CoreS3 の実機がなくても、ダミークライアントでプロトコル�
 .venv\Scripts\python -m pc.main --serve
 ```
 
-`--serve` は `config.yaml` の `audio.output` を `both` に上書きします
-（PC のスピーカーとウサギの両方から音が出る）。恒久的に変えるなら設定側で:
+出力先は `config.yaml` の `audio.output` で決まります。
 
 | `audio.output` | 動作 |
 |---|---|
-| `local` | PC のスピーカーだけ（既定。Step 1 の動作） |
-| `coreS3` | ウサギだけ |
-| `both` | 両方。開発中はこれが便利 |
+| `local` | PC のスピーカーだけ |
+| `coreS3` | ウサギだけ（既定） |
+| `both` | 両方。手元でも聴きたいときに |
+
+`--serve` は `local` のときだけ `both` に上書きします（PC で鳴らしつつ
+ウサギにも送る）。`coreS3` を選んでいるなら `--serve` は不要で、付けても
+PC からは鳴りません。
 
 **CoreS3 の代わり**（別のターミナルで）
 
@@ -192,15 +201,18 @@ CoreS3 の実機がなくても、ダミークライアントでプロトコル�
 | `--no-play` | 音を鳴らさない（受信の確認だけ） |
 | `--save out.wav` | 受信した音声を保存する |
 | `--touch-after 3` | 3秒後に touch イベントを送る |
+| `--mic` | PC のマイクをロボットのマイクとして中継する |
 | `--host 192.168.x.x` | 別マシンから繋ぐ |
 
 **プロトコルの自己テスト**
 
 ```powershell
-.venv\Scripts\python tools\protocol_test.py
+.venv\Scripts\python tools\protocol_test.py    # 出力側 16項目
+.venv\Scripts\python tools\core_mic_test.py    # マイク側 15項目
 ```
 
-状態 push・音声転送・barge-in・イベント・再接続・誤パス拒否を自動で確認します。
+状態 push・音声転送・flush・イベント・再接続・誤パス拒否と、マイクの開閉指示・
+フレームの組み直し・増幅を自動で確認します。
 CoreS3 のファームを書くときは、この仕様に合わせてください。
 
 ## 設定
@@ -209,6 +221,8 @@ CoreS3 のファームを書くときは、この仕様に合わせてくださ�
 
 | 項目 | 説明 |
 |---|---|
+| `audio.input` | `coreS3`（既定）= ロボットのマイク / `local` = PC のマイク |
+| `audio.input_gain` | ロボットの音が小さいとき。まずファーム側の `MIC_MAGNIFICATION` |
 | `wake.words` | ウェイクワード。ひらがなで書く（カタカナ・漢字は自動で吸収） |
 | `tts.speaker` | VOICEVOX の話者 ID。`--list-speakers` で確認 |
 | `tts.speed` | 話速。1.1〜1.2 くらいがロボットらしい |
@@ -229,13 +243,22 @@ CoreS3 のファームを書くときは、この仕様に合わせてくださ�
 
 ## トラブル
 
-**マイクが反応しない**
+**マイクが反応しない（ロボット）**
+起動ログに `CoreS3 のマイクから音が届きはじめました` が出ているか確認して
+ください。出ていなければ音が届いていません。ファームが古い可能性があるので
+`pio run -t upload` で焼き直します。切り分けには `--pc-mic` を使ってください。
+
+**マイクが反応しない（PC / `--pc-mic`）**
 `--list-devices` で入力デバイスを確認し、`config.yaml` の `audio.input_device`
 にインデックス番号か名前の一部を指定してください。
 
 **自分の声を拾って誤動作する**
-Step 1 では再生中にマイクを閉じているため、原則起きません。
-それでも起きる場合は `vad.threshold` を上げてください。
+起きません。ロボットのマイクとスピーカーは同時に開けないため、喋っている
+あいだマイクは物理的に閉じています。`--pc-mic` の場合も再生中は閉じています。
+
+**喋っている最中に遮れない**
+仕様です。半二重なので聞いていません。割り込みが要るならタッチか IMU を
+使ってください（未実装）。詳細は `docs/core-mic.md`。
 
 **返事が遅い**
 初回だけモデルのロードで6秒ほどかかります（2回目以降は速い）。
@@ -337,9 +360,19 @@ ejected60821-205038-047_conf_nsp0.93.wav
 原因が「音量」「VAD の切り出し」「モデルの力不足」のどれなのかを切り分ける
 診断ツールがあります。
 
+`audio.input` の設定に従って、ロボットのマイクか PC のマイクで録ります。
+**同じ位置・同じ文で両方を測ると、「ロボットのマイクだから」なのか
+「距離や音量の問題」なのかが切り分けられます。**
+
+> 対話ループが動いているとポート 8765 が塞がっていて起動できません。
+> 止めてから実行してください。
+
 ```powershell
 # 6秒録音して、音量・VAD・モデル別の認識結果をまとめて出す
 .venv\Scripts\python -m pc.main --check-mic
+
+# PC のマイクで同じことをする（比較用）
+.venv\Scripts\python -m pc.main --check-mic --pc-mic
 
 # 長めに録りたいとき
 .venv\Scripts\python -m pc.main --check-mic --seconds 10
@@ -363,7 +396,8 @@ ejected60821-205038-047_conf_nsp0.93.wav
 
 | 症状 | 対処 |
 |---|---|
-| 音量が小さい | Windows のマイク音量を上げる。マイクに近づく |
+| 音量が小さい（ロボット） | `firmware/src/config.h` の `MIC_MAGNIFICATION` を上げる |
+| 音量が小さい（PC） | Windows のマイク音量を上げる。マイクに近づく |
 | VAD が0本 | `vad.threshold` を 0.3 程度まで下げる |
 | 語尾が切れる | `vad.hangover_ms` を 600 程度まで上げる |
 | 認識が不正確 | `stt.model` を上げる（`medium` が既定。さらに上は `large-v3`） |
@@ -391,9 +425,11 @@ LLM と合わせて 3616/4096 MiB に収まります。
 | `main.py` | 対話ループ本体 |
 | `state.py` | 状態機械（Step 4 で CoreS3 の顔と同期させる） |
 | `wake.py` | ウェイクワード判定・会話モード |
-| `audio/mic.py` | マイク入力 |
+| `audio/mic.py` | PC のマイク入力（`--pc-mic` 用） |
+| `audio/remote_mic.py` | ロボットのマイク入力（既定）。`mic.py` と同じ形 |
 | `audio/vad.py` | Silero VAD による発話区間の切り出し |
-| `audio/player.py` | 再生キュー（Step 3 で CoreS3 送信に差し替え） |
+| `audio/player.py` | PC のスピーカーへの再生キュー |
+| `transport/server.py` | CoreS3 との WebSocket。音声の出力先であり入力元 |
 | `stt/whisper.py` | faster-whisper |
 | `llm/client.py` | Ollama / Claude の切り替え |
 | `llm/sentence.py` | ストリームの文分割・感情タグ抽出・TTS サニタイズ |
