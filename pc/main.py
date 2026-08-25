@@ -25,7 +25,7 @@ from .llm import client as llm_client
 from .llm.sentence import SentenceStreamer
 from .state import EMOTION_TO_TAG, Emotion, State, StateMachine
 from .stt.whisper import Whisper
-from .transport.server import RabbitServer
+from .transport import RabbitLink, build_link, normalize_link
 from .tts.voicevox import VoiceVox
 from .wake import WakeDetector
 
@@ -147,24 +147,18 @@ class Rabbit:
         if target in ("local", "both"):
             self.player = Player(sample_rate=24000, device=cfg["audio"]["output_device"])
 
-        self.server: RabbitServer | None = None
-        # 入力をロボットに任せる場合も、受け口としてサーバが要る
+        self.link: RabbitLink | None = None
+        # 入力をロボットに任せる場合も、受け口として接続が要る。
+        # 待ち受けるか繋ぎに行くかは transport.link が決める（docs/wireless-link.md）
         if target in ("coreS3", "both") or source == "coreS3":
-            tcfg = cfg.get("transport", {})
-            self.server = RabbitServer(
-                host=tcfg.get("host", "0.0.0.0"),
-                port=tcfg.get("port", 8765),
-                path=tcfg.get("path", "/rabbit"),
-                sample_rate=24000,
-                chunk_ms=tcfg.get("chunk_ms", 20),
-            )
-            self.server.on_event(self._on_core_event)
+            self.link = build_link(cfg)
+            self.link.on_event(self._on_core_event)
 
-        # サーバは入力の受け口としてだけ立っていることがある。そのときまで
+        # 接続は入力の受け口としてだけ張られていることがある。そのときまで
         # 音を流すと、output: local のつもりでウサギから声が出てしまう
         sinks = [self.player] if self.player is not None else []
-        if self.server is not None and target in ("coreS3", "both"):
-            sinks.append(self.server)
+        if self.link is not None and target in ("coreS3", "both"):
+            sinks.append(self.link)
         self.sink = TeeSink(*sinks)
         if not self.sink.sinks:
             self.sink = NullSink()
@@ -175,8 +169,8 @@ class Rabbit:
 
     def _on_state(self, state: State, emotion: Emotion) -> None:
         log.debug("state -> %s / %s", state.value, emotion.value)
-        if self.server is not None:
-            self.server.push_state(state.value, emotion.value)
+        if self.link is not None:
+            self.link.push_state(state.value, emotion.value)
 
     def _on_core_event(self, ev: dict) -> None:
         """CoreS3 から届いたイベント。Step 5 でタッチ起動などに使う。"""
@@ -321,10 +315,10 @@ class Rabbit:
 
     async def _wait_client(self) -> None:
         """ロボットのマイクを使うときは、繋がるまで待たないと何も聞こえない。"""
-        if self.server is None or self.server.clients:
+        if self.link is None or self.link.clients:
             return
         print("  CoreS3 の接続を待っています（Ctrl+C で中止）... ", end="", flush=True)
-        while self.server.clients == 0:
+        while self.link.clients == 0:
             await asyncio.sleep(0.2)
         print("接続しました")
 
@@ -334,7 +328,7 @@ class Rabbit:
             # UtteranceSegmenter から見た形は Mic と同じなので、
             # この行より下は入力元が変わっても何も変わらない
             self.mic = RemoteMic(
-                self.server,
+                self.link,
                 sample_rate=acfg["sample_rate"],
                 frame_samples=acfg["frame_samples"],
                 gain=float(acfg.get("input_gain", 1.0)),
@@ -358,11 +352,14 @@ class Rabbit:
 
         await self.start_output()
 
-        if self.server is not None:
-            tcfg = self.cfg.get("transport", {})
+        if self.link is not None:
+            mode = normalize_link(self.cfg.get("transport", {}).get("link"))
             print()
-            print(f"  CoreS3 の接続待ち: ws://<このPCのIP>:{tcfg.get('port', 8765)}"
-                  f"{tcfg.get('path', '/rabbit')}")
+            print(f"  接続 [{mode}]: {self.link.describe()}")
+            if mode == "hotspot":
+                print("  （ホットスポットが出ていないなら tools\\hotspot.ps1 -Action Start）")
+            elif mode == "robot-ap":
+                print("  （PC の WiFi をロボットの SSID に切り替えておいてください）")
             print("  （実機がなければ tools/dummy_core.py で代用できます）")
 
         if self.input_source == "coreS3":
@@ -401,14 +398,14 @@ class Rabbit:
     async def start_output(self) -> None:
         if self.player is not None:
             self.player.start()
-        if self.server is not None:
-            await self.server.start()
+        if self.link is not None:
+            await self.link.start()
 
     async def stop_output(self) -> None:
         if self.player is not None:
             self.player.stop()
-        if self.server is not None:
-            await self.server.stop()
+        if self.link is not None:
+            await self.link.stop()
 
     async def aclose(self) -> None:
         await self.llm.aclose()
@@ -437,14 +434,14 @@ async def text_mode(cfg: dict, text: str) -> None:
     try:
         await rabbit.preflight()
         await rabbit.start_output()
-        if rabbit.server is not None:
+        if rabbit.link is not None:
             wait = cfg.get("transport", {}).get("wait_client_sec", 0)
             if wait:
                 print(f"  CoreS3 の接続を待っています（最大 {wait:.0f}秒）...")
                 until = time.monotonic() + wait
-                while rabbit.server.clients == 0 and time.monotonic() < until:
+                while rabbit.link.clients == 0 and time.monotonic() < until:
                     await asyncio.sleep(0.2)
-                print(f"  接続 {rabbit.server.clients} 台")
+                print(f"  接続 {rabbit.link.clients} 台")
         print(f"\n  あなた   > {text}")
         await rabbit.respond(text)
         await rabbit.stop_output()

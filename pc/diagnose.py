@@ -61,17 +61,11 @@ def record(seconds: float, sample_rate: int, device) -> np.ndarray:
 async def record_remote(cfg: dict, seconds: float) -> np.ndarray:
     """ロボットのマイクで録る。対話で実際に使う経路と同じ音を測る。"""
     from .audio.remote_mic import RemoteMic
-    from .transport.server import RabbitServer
+    from .transport import build_link
 
     acfg = cfg["audio"]
     tcfg = cfg.get("transport", {})
-    server = RabbitServer(
-        host=tcfg.get("host", "0.0.0.0"),
-        port=tcfg.get("port", 8765),
-        path=tcfg.get("path", "/rabbit"),
-        sample_rate=24000,
-        chunk_ms=tcfg.get("chunk_ms", 20),
-    )
+    server = build_link(cfg)
     try:
         await server.start()
     except OSError as e:

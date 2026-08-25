@@ -106,7 +106,24 @@ persona:
 
 # CoreS3 との WebSocket 接続（audio.output が coreS3 または both のとき有効）
 transport:
-  host: "0.0.0.0"           # LAN 内から繋げるよう全インターフェースで待ち受ける
+  # 繋ぎ方。プロトコルは3通りとも同じで、違うのは電波の親機と接続の向きだけ。
+  # ファーム側（firmware/src/config.h の LINK_MODE）と揃えること。
+  # 選び方と手順は docs/wireless-link.md。
+  #
+  #   router    家の WiFi ルータ経由。PC が待ち受ける。**ルータが要る**
+  #   hotspot   PC が親機（Windows のモバイルホットスポット）。PC が待ち受ける。
+  #             ルータ不要で、PC のインターネットも保てる。既定
+  #   robot-ap  CoreS3 が親機（SoftAP）。PC が繋ぎに行く。
+  #             ルータもインターネットも要らないが、PC の WiFi は占有される
+  #
+  # router と hotspot は PC 側・ファーム側とも同じ処理を通る（どちらも
+  # 「既にある AP に CoreS3 が参加し、PC が待ち受ける」）。名前を分けてあるのは
+  # PC の IP の調べ方とファイアウォールの要否が違うため
+  link: "hotspot"
+  host: "0.0.0.0"           # 待ち受ける側のとき。全インターフェースで待つ
+  # 繋ぎに行く側（link: robot-ap）のときの接続先。
+  # ESP32 の SoftAP はゲートウェイに必ずこのアドレスを使うので調べる必要がない
+  core_host: "192.168.4.1"
   port: 8765
   path: "/rabbit"
   chunk_ms: 20              # 送信する PCM チャンクの長さ

@@ -203,16 +203,31 @@ PC からは鳴りません。
 | `--touch-after 3` | 3秒後に touch イベントを送る |
 | `--mic` | PC のマイクをロボットのマイクとして中継する |
 | `--host 192.168.x.x` | 別マシンから繋ぐ |
+| `--serve` | 繋ぎに行かず待ち受ける（`transport.link: robot-ap` を試すとき） |
+
+**ロボットが親機の構成を試すとき**
+
+`transport.link: robot-ap` では**待ち受けるのがロボット側**になるので、
+ダミーも向きを変えます。
+
+```powershell
+# ロボット役（別のターミナルで先に起動）
+.venv\Scripts\python tools\dummy_core.py --serve
+
+# PC 側。config.yaml を link: robot-ap / core_host: "127.0.0.1" にして
+.venv\Scripts\python -m pc.main --text "こんにちは"
+```
 
 **プロトコルの自己テスト**
 
 ```powershell
-.venv\Scripts\python tools\protocol_test.py    # 出力側 16項目
+.venv\Scripts\python tools\protocol_test.py    # 出力側 27項目
 .venv\Scripts\python tools\core_mic_test.py    # マイク側 15項目
 ```
 
 状態 push・音声転送・flush・イベント・再接続・誤パス拒否と、マイクの開閉指示・
-フレームの組み直し・増幅を自動で確認します。
+フレームの組み直し・増幅を自動で確認します。**繋ぐ向きが逆になる構成
+（`robot-ap`）も同じ項目で確認します**（11項目）。
 CoreS3 のファームを書くときは、この仕様に合わせてください。
 
 ## 設定
@@ -221,6 +236,7 @@ CoreS3 のファームを書くときは、この仕様に合わせてくださ�
 
 | 項目 | 説明 |
 |---|---|
+| `transport.link` | 繋ぎ方。`hotspot`（既定・ルータ不要）/ `robot-ap` / `router`。[接続](../docs/wireless-link.md) |
 | `audio.input` | `coreS3`（既定）= ロボットのマイク / `local` = PC のマイク |
 | `audio.input_gain` | ロボットの音が小さいとき。まずファーム側の `MIC_MAGNIFICATION` |
 | `wake.words` | ウェイクワード。ひらがなで書く（カタカナ・漢字は自動で吸収） |
@@ -429,7 +445,9 @@ LLM と合わせて 3616/4096 MiB に収まります。
 | `audio/remote_mic.py` | ロボットのマイク入力（既定）。`mic.py` と同じ形 |
 | `audio/vad.py` | Silero VAD による発話区間の切り出し |
 | `audio/player.py` | PC のスピーカーへの再生キュー |
-| `transport/server.py` | CoreS3 との WebSocket。音声の出力先であり入力元 |
+| `transport/link.py` | CoreS3 との WebSocket。音声の出力先であり入力元。**繋ぐ向きに依らない部分** |
+| `transport/server.py` | 待ち受ける側（`router` / `hotspot`） |
+| `transport/client.py` | 繋ぎに行く側（`robot-ap`）。再接続つき |
 | `stt/whisper.py` | faster-whisper |
 | `llm/client.py` | Ollama / Claude の切り替え |
 | `llm/sentence.py` | ストリームの文分割・感情タグ抽出・TTS サニタイズ |

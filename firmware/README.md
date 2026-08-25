@@ -19,31 +19,54 @@ PC ← マイク(PCM) / タッチ / 加速度センサ
 
 ## 設定
 
-WiFi の認証情報を書きます。
-
 ```powershell
 copy firmware\src\secrets.local.h.example firmware\src\secrets.local.h
 ```
 
-コピーしたファイルに自分の WiFi と PC の IP を書いてください。
+コピーしたファイルに、繋ぎ方を1つ選んで書きます。**WiFi ルータは要りません。**
+選び方と手順は [WiFi ルータなしで繋ぐ](../docs/wireless-link.md)。
+
+| | 親機（電波を出す） | 書くもの |
+|---|---|---|
+| **`hotspot`**（既定・おすすめ） | PC のモバイルホットスポット | SSID / パスワード |
+| `robot-ap` | **この機体** | `LINK_MODE` / `AP_SSID` / `AP_PASSWORD` |
+| `router` | 家の WiFi ルータ | SSID / パスワード / `PC_HOST` |
+
+`hotspot` の SSID とパスワードは PC 側で出せます。
+
+```powershell
+.\tools\hotspot.ps1 -Action Start
+```
 
 ```c
-#define WIFI_SSID     "..."
-#define WIFI_PASSWORD "..."
-#define PC_HOST       "192.168.0.2"   // PC の IP。ipconfig で確認
+#define WIFI_SSID     "PC のホットスポットの SSID"
+#define WIFI_PASSWORD "そのパスワード"
 ```
+
+`PC_HOST` は書かなくて構いません。ホットスポットの PC 側アドレスは
+**必ず 192.168.137.1** で、それが既定値だからです。`router` を選んだときだけ
+`ipconfig` で調べて書いてください。
+
+**CoreS3 は 2.4GHz しか受けられません。** ホットスポットが 5GHz で立っていると
+SSID がそもそも見えません。`hotspot.ps1 -Action Status` が帯域を表示します。
 
 `secrets.local.h` は `.gitignore` と pre-commit フックの**二重**で保護されており、
 `git add -f` で強制的にステージしてもコミットが止まります。
 
 ## ビルドと書き込み
 
+繋ぎ方で環境が分かれています。**`secrets.local.h` を書き換えずに両方試せます。**
+
 ```powershell
 cd firmware
-pio run                  # ビルドだけ（実機なしでも通ります）
-pio run -t upload        # 書き込み
-pio device monitor       # シリアルを見る
+pio run                              # 両方ビルドするだけ（実機なしでも通ります）
+pio run -t upload                    # 書き込み（hotspot / router 用）
+pio run -e robot-ap -t upload        # 書き込み（この機体が親機になる版）
+pio device monitor                   # シリアルを見る
 ```
+
+`hotspot` と `router` はファームからは同じです（どちらも「既にある AP に
+参加して PC へ繋ぎに行く」）。既定の `-e m5stack-cores3` がそれにあたります。
 
 PlatformIO の CLI が PATH にない場合は、VS Code 拡張に同梱のものを使えます。
 
@@ -107,9 +130,9 @@ PlatformIO の CLI が PATH にない場合は、VS Code 拡張に同梱のも�
 | ファイル | 役割 |
 |---|---|
 | `main.cpp` | 全体の流れ、タッチと加速度センサ |
-| `config.h` | 公開してよい設定 |
-| `secrets.local.h` | WiFi 認証情報（**非公開**） |
-| `net.cpp` | WiFi と WebSocket、プロトコルの処理 |
+| `config.h` | 公開してよい設定。繋ぎ方の `LINK_MODE` もここ |
+| `secrets.local.h` | WiFi 認証情報と繋ぎ方の選択（**非公開**） |
+| `net.cpp` | WiFi と WebSocket、プロトコルの処理。親機／子機の両方 |
 | `mic_in.cpp` | マイク録音と半二重の切り替え |
 | `audio_out.cpp` | リングバッファ → スピーカー |
 | `face.cpp` | 状態に応じた画面表示 |
@@ -133,6 +156,12 @@ PC 側の仕様は `tools/protocol_test.py` が固定しています。
 | → PC | text | `{"t":"audio_done"}` |
 
 ## 設計上の判断
+
+**待ち受ける側にもなれます。** ロボットが親機になる構成（`LINK_ROBOT_AP`）では
+この機体が WebSocket サーバになり、PC が繋ぎに来ます。`net.cpp` は `#if` で
+使うほうのクラスだけを取り込みますが、**イベントを受けてからの処理は共通**です。
+プロトコルは向きが変わっても同じなので、`hello` を返すのも音声を受けるのも
+同じコードを通ります。詳細は [WiFi ルータなしで繋ぐ](../docs/wireless-link.md)。
 
 **プリバッファ 200ms。** Wi-Fi のゆらぎを吸収します。長くすると途切れにくく
 なりますが、鳴らし切るまでマイクを開けないので「喋り終わってから聞けるまで」が

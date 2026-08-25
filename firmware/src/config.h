@@ -10,9 +10,63 @@
   #include "secrets.local.h"
 #else
   #warning "secrets.local.h がありません。secrets.local.h.example をコピーしてください"
+#endif
+
+// ---- 繋ぎ方 --------------------------------------------------------------
+// 電波の親機をどれにするか。**PC 側（pc/config.yaml の transport.link）と
+// 揃えること。** 選び方と手順は docs/wireless-link.md。
+//
+//   LINK_STA       既にある AP に参加する。相手が家の WiFi ルータでも
+//                  PC のモバイルホットスポットでも、この機体の処理は同じ。
+//                  PC が待ち受け、こちらが繋ぎに行く（PC_HOST が要る）
+//
+//   LINK_ROBOT_AP  この機体が親機になる。**ルータもインターネットも要らない。**
+//                  こちらが待ち受け、PC が繋ぎに来る（PC_HOST は使わない）
+//
+// PC 側の router と hotspot はどちらも LINK_STA。違いは PC の IP の調べ方と
+// ファイアウォールの要否だけで、ファームからは区別できない。
+//
+// 切り替えるときは secrets.local.h に書く:  #define LINK_MODE LINK_ROBOT_AP
+#define LINK_STA      0
+#define LINK_ROBOT_AP 1
+
+#ifndef LINK_MODE
+  #define LINK_MODE LINK_STA
+#endif
+
+// secrets.local.h に書かれていないものを埋める。
+// 使わないモードの値まで書かせないため、既定値はここに置く
+#ifndef WIFI_SSID
   #define WIFI_SSID     ""
+#endif
+#ifndef WIFI_PASSWORD
   #define WIFI_PASSWORD ""
-  #define PC_HOST       "192.168.0.2"
+#endif
+// PC の IP（LINK_STA のときだけ使う）。既定は Windows のモバイル
+// ホットスポットのアドレスで、あれは常にこの値になるので調べる必要がない。
+// 家の WiFi ルータ経由（router）なら ipconfig で調べて secrets に書く
+#ifndef PC_HOST
+  #define PC_HOST "192.168.137.1"
+#endif
+
+// ---- この機体が親機になるとき（LINK_ROBOT_AP）----------------------------
+// SSID は公開してよい。パスワードは secrets.local.h に置くこと。
+// PC 側の接続先は 192.168.4.1 に固定される（ESP32 の SoftAP は
+// ゲートウェイに必ずこのアドレスを使う）ので、IP を調べる作業が要らない
+#ifndef AP_SSID
+  #define AP_SSID "UsachanRobo"
+#endif
+// **8文字以上で WPA2、それ未満だと暗号化なしで立つ**（net.cpp が警告を出す）
+#ifndef AP_PASSWORD
+  #define AP_PASSWORD ""
+#endif
+// 電波が混んでいたら変える。重ならないのは 1 / 6 / 11
+#ifndef AP_CHANNEL
+  #define AP_CHANNEL 6
+#endif
+// PC 1台だけ入れる。余計な機器に入られると音の帯域を持っていかれる
+#ifndef AP_MAX_CLIENTS
+  #define AP_MAX_CLIENTS 1
 #endif
 
 #ifndef PC_PORT

@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pc.transport.server import RabbitServer  # noqa: E402
 
 PORT = 8799
+# ロボットが親機の向きを試すぶん。同時に立てるので別のポートにする
+AP_PORT = 8798
 results: list[tuple[bool, str]] = []
 
 
@@ -121,6 +123,95 @@ async def main() -> int:
         check(True, "誤パスが拒否される")
 
     await server.stop()
+
+    # --- ここから、繋ぐ向きが逆になる構成 ------------------------------------
+    # ロボットが SoftAP を立てて自分が待ち受け、PC が繋ぎに行く
+    # （transport.link: robot-ap）。**プロトコルは上とまったく同じ**なので、
+    # 同じ確認がそのまま通らなければおかしい。
+    print("=== 8. ロボットが親機の向き（robot-ap） ===")
+    from pc.transport.client import RabbitClient  # noqa: E402
+
+    heard: list = []          # ロボット役が受け取ったフレーム
+    conns: list = []
+    connected = asyncio.Event()
+
+    async def robot_handler(ws):
+        conns.append(ws)
+        connected.set()
+        # 実機のファームは接続されたら hello を送る（net.cpp の WStype_CONNECTED）
+        await ws.send(json.dumps({"t": "hello", "fw": "test-ap", "mic": True}))
+        try:
+            async for msg in ws:
+                heard.append(msg)
+        except websockets.ConnectionClosed:
+            pass
+
+    robot_server = await websockets.serve(robot_handler, "127.0.0.1", AP_PORT)
+    client = RabbitClient(host="127.0.0.1", port=AP_PORT)
+    cli_events: list[dict] = []
+    client.on_event(cli_events.append)
+    await client.start()
+
+    try:
+        await asyncio.wait_for(connected.wait(), timeout=5.0)
+    except asyncio.TimeoutError:
+        pass
+    await asyncio.sleep(0.3)
+    check(client.clients == 1, "PC 側から繋ぎに行けている")
+    check(any(e.get("t") == "hello" for e in cli_events), "ロボットの hello が届く")
+
+    heard.clear()
+    client.push_state("thinking", "neutral")
+    client.set_mic(True, rate=16000)
+    pcm = tone(0.5)
+    client.enqueue(pcm)
+    await client.drain()
+    await asyncio.sleep(0.4)
+
+    texts = [json.loads(m) for m in heard if isinstance(m, str)]
+    nbytes = sum(len(m) for m in heard if isinstance(m, (bytes, bytearray)))
+    kinds = [t.get("t") for t in texts]
+    check("audio_begin" in kinds and "audio_end" in kinds,
+          "この向きでも audio_begin / audio_end が届く")
+    check(nbytes == len(pcm) * 2,
+          f"この向きでも PCM のバイト数が一致（{nbytes} / 期待 {len(pcm) * 2}）")
+    check(any(t.get("t") == "mic" and t.get("on") is True for t in texts),
+          "マイクの開閉指示が届く")
+    check(any(t.get("t") == "state" and t.get("v") == "thinking" for t in texts),
+          "この向きでも state が届く")
+
+    # ロボット -> PC。実機はここにマイクの PCM を流す
+    got: list[bytes] = []
+    client.on_audio(got.append)
+    await conns[-1].send(np.zeros(512, dtype=np.int16).tobytes())
+    await conns[-1].send(json.dumps({"t": "touch", "x": 10, "y": 20}))
+    await asyncio.sleep(0.3)
+    check(len(got) == 1 and len(got[0]) == 1024, "マイクの PCM が PC まで届く")
+    check(any(e.get("t") == "touch" for e in cli_events), "この向きでも touch が届く")
+
+    print("=== 9. ロボットが落ちても繋ぎ直す ===")
+    # 実機の電源を入れ直しても PC 側を起動し直さなくてよいこと。
+    # 待ち受ける側と違い、繋ぎに行く側は自分で張り直す必要がある
+    connected.clear()
+    heard.clear()
+    await conns[-1].close()
+    await asyncio.sleep(0.3)
+    check(client.clients == 0, "切断が検知される")
+
+    reconnected = True
+    try:
+        await asyncio.wait_for(connected.wait(), timeout=10.0)
+    except asyncio.TimeoutError:
+        reconnected = False
+    await asyncio.sleep(0.4)
+    check(reconnected and client.clients == 1, "自動で繋ぎ直す")
+    texts = [json.loads(m) for m in heard if isinstance(m, str)]
+    check(any(t.get("t") == "state" and t.get("v") == "thinking" for t in texts),
+          "繋ぎ直したあと現在の状態が送り直される")
+
+    await client.stop()
+    robot_server.close()
+    await robot_server.wait_closed()
 
     ng = [label for ok, label in results if not ok]
     print()

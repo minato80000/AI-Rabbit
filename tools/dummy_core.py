@@ -1,4 +1,4 @@
-r"""CoreS3 の代わりをする WebSocket クライアント。
+r"""CoreS3 の代わりをするダミー。
 
 実機のファームを書く前に、プロトコルと音声転送を検証するための道具。
 受け取った音声を PC のスピーカーで鳴らし、状態変化を顔文字で表示する。
@@ -7,6 +7,14 @@ r"""CoreS3 の代わりをする WebSocket クライアント。
     .venv\Scripts\python tools\dummy_core.py --no-play --save out.wav
     .venv\Scripts\python tools\dummy_core.py --touch-after 5
     .venv\Scripts\python tools\dummy_core.py --mic     マイク入力も代行する
+
+**接続の向きは 2 通りある。** 既定は実機と同じく自分から繋ぎに行く
+（transport.link が router / hotspot のとき）。ロボットが親機になる構成
+（robot-ap）では実機が待ち受ける側になるので、--serve でその向きを再現する。
+
+    .venv\Scripts\python tools\dummy_core.py --serve
+
+プロトコル自体はどちらでも同じ。詳細は docs/wireless-link.md。
 """
 from __future__ import annotations
 
@@ -180,91 +188,131 @@ class DummyCore:
         return secs
 
 
-async def run(args) -> int:
-    url = f"ws://{args.host}:{args.port}{args.path}"
+async def session(ws, args) -> None:
+    """繋がった1本を、切れるまで実機のように振る舞わせる。
+
+    自分から繋ぎに行ったか、繋がれたかは、ここから先は関係ない。
+    実機のファーム（net.cpp）も同じ作りになっている。
+    """
     core = DummyCore(play=not args.no_play, save=Path(args.save) if args.save else None)
     mic: DummyMic | None = None
-
-    print(f"[接続] {url}")
     try:
-        async with websockets.connect(url, max_size=None) as ws:
-            print("[接続] 成功")
-            hello = {"t": "hello", "fw": "dummy-0.1.0"}
-            if args.mic:
-                hello["mic"] = True
-                mic = DummyMic(ws, asyncio.get_running_loop(),
-                               device=args.mic_device)
-            await ws.send(json.dumps(hello))
+        hello = {"t": "hello", "fw": "dummy-0.1.0"}
+        if args.mic:
+            hello["mic"] = True
+            mic = DummyMic(ws, asyncio.get_running_loop(),
+                           device=args.mic_device)
+        await ws.send(json.dumps(hello))
 
-            if args.touch_after:
-                asyncio.create_task(_send_touch(ws, args.touch_after))
+        if args.touch_after:
+            asyncio.create_task(_send_touch(ws, args.touch_after))
 
-            deadline = time.monotonic() + args.timeout if args.timeout else None
-            while True:
-                if deadline is not None:
-                    remain = deadline - time.monotonic()
-                    if remain <= 0:
-                        print("[終了] タイムアウト")
-                        break
-                    try:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=remain)
-                    except asyncio.TimeoutError:
-                        print("[終了] タイムアウト")
-                        break
+        deadline = time.monotonic() + args.timeout if args.timeout else None
+        while True:
+            if deadline is not None:
+                remain = deadline - time.monotonic()
+                if remain <= 0:
+                    print("[終了] タイムアウト")
+                    break
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=remain)
+                except asyncio.TimeoutError:
+                    print("[終了] タイムアウト")
+                    break
+            else:
+                msg = await ws.recv()
+
+            if isinstance(msg, bytes):
+                core.on_audio(msg)
+                continue
+
+            obj = json.loads(msg)
+            t = obj.get("t")
+            if t == "state":
+                s, e = obj.get("v", "?"), obj.get("emotion", "?")
+                print(f"  [state] {s:9} / {e:9}  {face(s, e)}")
+            elif t == "mic":
+                if mic is None:
+                    print(f"  [mic] 指示が来ましたが --mic 無しです: {obj}")
                 else:
-                    msg = await ws.recv()
-
-                if isinstance(msg, bytes):
-                    core.on_audio(msg)
-                    continue
-
-                obj = json.loads(msg)
-                t = obj.get("t")
-                if t == "state":
-                    s, e = obj.get("v", "?"), obj.get("emotion", "?")
-                    print(f"  [state] {s:9} / {e:9}  {face(s, e)}")
-                elif t == "mic":
-                    if mic is None:
-                        print(f"  [mic] 指示が来ましたが --mic 無しです: {obj}")
-                    else:
-                        mic.set_wanted(bool(obj.get("on")), int(obj.get("rate", 16000)))
-                elif t == "audio_begin":
-                    # 実機はここで I2S をスピーカーへ明け渡す
-                    if mic is not None:
-                        mic.suspend()
-                    core.rate = obj.get("rate", 24000)
-                    core.received = 0
-                    core.begin_at = time.monotonic()
-                    core._open_stream()
-                    print(f"  [audio] begin {core.rate}Hz {obj.get('fmt')}")
-                elif t == "audio_end":
-                    secs = core.finish()
-                    el = time.monotonic() - core.begin_at
-                    print(f"  [audio] end   {core.received} bytes / 音声 {secs:.2f}s / 経過 {el:.2f}s")
-                    core._close_stream()
-                    await ws.send(json.dumps({"t": "audio_done"}))
-                    if mic is not None:
-                        mic.resume()
-                elif t == "audio_flush":
-                    core.buf.clear()
-                    core.received = 0
-                    print("  [audio] flush（barge-in）")
-                    core._close_stream()
-                    if mic is not None:
-                        mic.resume()
-                else:
-                    print(f"  [その他] {obj}")
-    except OSError as e:
-        print(f"[失敗] 接続できません: {e}")
-        print("  PC 側が --serve 付きで起動しているか確認してください。")
-        return 1
+                    mic.set_wanted(bool(obj.get("on")), int(obj.get("rate", 16000)))
+            elif t == "audio_begin":
+                # 実機はここで I2S をスピーカーへ明け渡す
+                if mic is not None:
+                    mic.suspend()
+                core.rate = obj.get("rate", 24000)
+                core.received = 0
+                core.begin_at = time.monotonic()
+                core._open_stream()
+                print(f"  [audio] begin {core.rate}Hz {obj.get('fmt')}")
+            elif t == "audio_end":
+                secs = core.finish()
+                el = time.monotonic() - core.begin_at
+                print(f"  [audio] end   {core.received} bytes / 音声 {secs:.2f}s / 経過 {el:.2f}s")
+                core._close_stream()
+                await ws.send(json.dumps({"t": "audio_done"}))
+                if mic is not None:
+                    mic.resume()
+            elif t == "audio_flush":
+                core.buf.clear()
+                core.received = 0
+                print("  [audio] flush（barge-in）")
+                core._close_stream()
+                if mic is not None:
+                    mic.resume()
+            else:
+                print(f"  [その他] {obj}")
     except websockets.ConnectionClosed:
-        print("[終了] サーバから切断されました")
+        print("[終了] 相手から切断されました")
     finally:
         core._close_stream()
         if mic is not None:
             mic.close()
+
+
+async def run_connect(args) -> int:
+    """PC が待ち受ける繋ぎ方（transport.link: router / hotspot）の代役。"""
+    url = f"ws://{args.host}:{args.port}{args.path}"
+    print(f"[接続] {url}")
+    try:
+        async with websockets.connect(url, max_size=None) as ws:
+            print("[接続] 成功")
+            await session(ws, args)
+    except OSError as e:
+        print(f"[失敗] 接続できません: {e}")
+        print("  PC 側が起動しているか、transport.link が router / hotspot か確認してください。")
+        return 1
     return 0
+
+
+async def run_serve(args) -> int:
+    """ロボットが親機の繋ぎ方（transport.link: robot-ap）の代役。
+
+    実機は SoftAP を立てて自分が WebSocket サーバになる。その向きを
+    手元で再現するので、実機なしでも PC 側のクライアント経路を試せる。
+    """
+    async def handler(ws):
+        peer = getattr(ws, "remote_address", None)
+        print(f"[接続] PC が繋いできました {peer}")
+        await session(ws, args)
+
+    async with websockets.serve(handler, args.bind, args.port, max_size=None):
+        print(f"[待受] ws://{args.bind}:{args.port}{args.path}")
+        print("  PC 側は transport.link: robot-ap にして起動してください。")
+        print(f"  実機ではなく手元で試すなら transport.core_host: \"{args.bind}\"。")
+        print("  終了は Ctrl+C。")
+        if args.timeout:
+            await asyncio.sleep(args.timeout)
+            print("[終了] タイムアウト")
+        else:
+            await asyncio.Future()  # Ctrl+C まで待つ
+    return 0
+
+
+async def run(args) -> int:
+    if args.serve:
+        return await run_serve(args)
+    return await run_connect(args)
 
 
 async def _send_touch(ws, delay: float) -> None:
@@ -274,10 +322,14 @@ async def _send_touch(ws, delay: float) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="CoreS3 の代わりをするダミークライアント")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap = argparse.ArgumentParser(description="CoreS3 の代わりをするダミー")
+    ap.add_argument("--host", default="127.0.0.1", help="繋ぎに行く先（既定の向き）")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--path", default="/rabbit")
+    ap.add_argument("--serve", action="store_true",
+                    help="繋ぎに行かず待ち受ける。ロボットが親機の構成"
+                         "（transport.link: robot-ap）を実機なしで試すとき")
+    ap.add_argument("--bind", default="127.0.0.1", help="--serve で待ち受けるアドレス")
     ap.add_argument("--no-play", action="store_true", help="音を鳴らさない")
     ap.add_argument("--save", help="受信した音声を WAV に保存する")
     ap.add_argument("--touch-after", type=float, help="この秒数後に touch を送る")

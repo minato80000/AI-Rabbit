@@ -16,6 +16,7 @@ M5Stack CoreS3 を使ったウサギ型の卓上ロボット。話しかける�
 | [PC 側の使い方](pc/README.md) | セットアップ、起動、設定、トラブル対応 |
 | [CoreS3 のファーム](firmware/README.md) | 書き込み手順、配線なしの構成、プロトコル |
 | [マイク](docs/core-mic.md) | ロボットのマイクで聞く。半二重の制約と測り方 |
+| [接続](docs/wireless-link.md) | WiFi ルータなしで繋ぐ。3通りの選び方と手順 |
 
 ## 現在の状態
 
@@ -40,3 +41,7 @@ git config core.hooksPath tools/hooks
 ```
 
 VOICEVOX を起動しておく必要があります。詳細は [pc/README.md](pc/README.md)。
+
+**WiFi ルータは要りません。** 既定では PC 自身を親機（モバイルホットスポット）に
+します。ルータもインターネットも無い場所へ持ち出すなら、ロボット自身を親機に
+することもできます。[接続](docs/wireless-link.md) を参照してください。
