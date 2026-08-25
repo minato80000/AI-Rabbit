@@ -1,0 +1,13 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "id": "usachan-export-stl",
+    "author": "",
+    "description": {
+        "": "usachan_asm の部品を STL として body/ に書き出す（M5Stack は除く）"
+    },
+    "version": "",
+    "runOnStartup": false,
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}
