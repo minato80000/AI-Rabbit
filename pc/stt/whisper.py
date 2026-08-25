@@ -56,6 +56,7 @@ class Whisper:
         no_speech_threshold: float = 0.6,
         hallucination_patterns: list[str] | None = None,
         save_rejected: bool = True,
+        save_heard: bool = False,
     ) -> None:
         self.language = language
         # 1 は貪欲法で最速。GPU なら 5 にしても余裕があり、精度が上がる
@@ -74,7 +75,14 @@ class Whisper:
         # 幻聴なのか、テレビなどの本物の音声を正しく拾っただけなのかは、
         # 音を聞かないと区別できない。
         self.save_rejected = save_rejected
-        self.reject_dir = Path(__file__).resolve().parent.parent.parent / "recordings" / "rejected"
+        # 通した区間も残す。精度を上げるには「何と言ったか」と「何と聞こえたか」を
+        # 並べて見るしかないが、既定ではそれが手に入らない（弾いた区間しか
+        # 残らないので、手元のデータが失敗例に偏る）。
+        # 部屋の会話がそのままディスクに残るので、既定は false。
+        self.save_heard = save_heard
+        rec = Path(__file__).resolve().parent.parent.parent / "recordings"
+        self.reject_dir = rec / "rejected"
+        self.heard_dir = rec / "heard"
         # 固有名詞を先に見せておくと綴りが安定する。
         # これがないと「ウサちゃん」が「おさちゃん」になり、名前を呼んでも反応しない。
         self.initial_prompt = initial_prompt
@@ -136,7 +144,31 @@ class Whisper:
                 self._dump_rejected(audio, text, "pattern", seg.no_speech_prob)
                 continue
             kept.append(seg.text)
-        return "".join(kept).strip()
+        text = "".join(kept).strip()
+        if text:
+            self._dump_heard(audio, text)
+        return text
+
+    def _dump_heard(self, audio: np.ndarray, text: str) -> None:
+        """通した区間を WAV と認識結果で残す。精度を測るための材料。"""
+        if not self.save_heard:
+            return
+        try:
+            self.heard_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+            path = self.heard_dir / f"{stamp}.wav"
+            self._write_wav(path, audio)
+            path.with_suffix(".txt").write_text(text + "\n", encoding="utf-8")
+        except Exception as e:
+            log.debug("通した区間の保存に失敗: %s", e)
+
+    def _write_wav(self, path: Path, audio: np.ndarray) -> None:
+        pcm = np.clip(audio * 32767.0, -32768, 32767).astype(np.int16)
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(pcm.tobytes())
 
     def _dump_rejected(self, audio: np.ndarray, text: str, reason: str, nsp: float) -> None:
         """弾いた区間を WAV で残す。あとで聞いて原因を確かめるため。"""
@@ -146,12 +178,7 @@ class Whisper:
             self.reject_dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
             path = self.reject_dir / f"{stamp}_{reason}_nsp{nsp:.2f}.wav"
-            pcm = np.clip(audio * 32767.0, -32768, 32767).astype(np.int16)
-            with wave.open(str(path), "wb") as w:
-                w.setnchannels(1)
-                w.setsampwidth(2)
-                w.setframerate(16000)
-                w.writeframes(pcm.tobytes())
+            self._write_wav(path, audio)
             path.with_suffix(".txt").write_text(
                 f"{text}\n(reason={reason}, no_speech_prob={nsp:.3f})\n", encoding="utf-8"
             )

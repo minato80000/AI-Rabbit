@@ -72,6 +72,10 @@ class UtteranceSegmenter:
         speech: list[np.ndarray] = []
         in_speech = False
         silence_run = 0
+        # 実際に有音だったフレーム数。長さの判定はこれで行う。
+        # speech の長さで測ると、プリロール 300ms が下駄になって
+        # min_speech_ms(250ms) を必ず超えてしまい、判定が死ぬ
+        voiced_count = 0
 
         async for frame in self.mic.frames():
             if not self.enabled:
@@ -79,6 +83,7 @@ class UtteranceSegmenter:
                     in_speech = False
                     speech.clear()
                     silence_run = 0
+                    voiced_count = 0
                     self.reset()
                 preroll.clear()
                 continue
@@ -93,6 +98,7 @@ class UtteranceSegmenter:
                 if voiced:
                     in_speech = True
                     silence_run = 0
+                    voiced_count = 1
                     speech = list(preroll)
                     preroll.clear()
                     if self.on_speech_start is not None:
@@ -100,13 +106,16 @@ class UtteranceSegmenter:
                 continue
 
             speech.append(frame)
-            silence_run = 0 if voiced else silence_run + 1
+            if voiced:
+                voiced_count += 1
+                silence_run = 0
+            else:
+                silence_run += 1
 
             # ここまでの有音長で待ち時間を決める。まだ短ければ続きを待つ
-            voiced_so_far = len(speech) - silence_run
             hangover = (
                 self.hangover_frames_short
-                if voiced_so_far < self.short_utterance_frames
+                if voiced_count < self.short_utterance_frames
                 else self.hangover_frames
             )
             too_long = len(speech) >= self.max_frames
@@ -116,10 +125,17 @@ class UtteranceSegmenter:
                 in_speech = False
                 self.reset()
                 # hangover 分の無音は末尾から落とす
-                voiced_frames = len(speech) - (silence_run if ended else 0)
-                if voiced_frames >= self.min_speech_frames:
-                    yield np.concatenate(speech[:voiced_frames])
+                keep = len(speech) - (silence_run if ended else 0)
+                if voiced_count >= self.min_speech_frames:
+                    yield np.concatenate(speech[:keep])
                 else:
-                    log.debug("utterance too short (%d frames), discarded", voiced_frames)
+                    # 物音や短い立ち上がりを whisper に渡さない。渡すと
+                    # 幻聴を返すうえ、推論のあいだマイクを閉じるので、
+                    # そこに重なった本当の発話の頭が欠ける
+                    log.debug(
+                        "有音 %dms（%d フレーム）は短すぎるので捨てました",
+                        int(voiced_count * self.frame_ms), voiced_count,
+                    )
                 speech = []
                 silence_run = 0
+                voiced_count = 0
