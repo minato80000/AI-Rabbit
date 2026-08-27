@@ -31,7 +31,11 @@ int touchAreaBottom() {
 // CoreS3 に押しボタンは無く、タッチ面が画面の下まで続いているぶんが
 // BtnA / BtnB / BtnC になっている
 void pollModeButton() {
-  if (!M5.BtnB.wasClicked()) return;
+  // wasClicked() ではなく wasReleased() を見る。**押している時間で取りこぼす**
+  // ため。M5Unified の Button_Class は 500ms（_msecHold）押されると _press を
+  // 2（hold）へ上げ、そこから離しても state_clicked にはならない。
+  // 効かないときほど長く押したくなるので、離した時点で切り替える
+  if (!M5.BtnB.wasReleased()) return;
   const bool dev = face.toggleMode() == DisplayMode::Dev;
   Serial.printf("[main] %sモードへ切り替えました\n", dev ? "開発" : "製品");
 }
@@ -40,12 +44,19 @@ void pollModeButton() {
 void pollTouch() {
   auto t = M5.Touch.getDetail();
   if (!t.wasPressed()) return;
+  // モード切替が効かないときの手がかり。BtnA/BtnB/BtnC の判定に使われるのは
+  // 変換後ではなく**生の座標**で、生の y が 240 以上（= 画面より下）のときだけ
+  // 押されたことになる。触れているのに「帯」と出ないなら、そもそも画面より下を
+  // 拾えていない。出るのに切り替わらないなら、押し方かループの遅さのほう
+  const auto raw = M5.Touch.getTouchPointRaw();
+  Serial.printf("[touch] %d,%d (生 %d,%d)%s\n", t.x, t.y, (int)raw.x, (int)raw.y,
+                raw.y >= 240 ? " <- ボタンの帯" : "");
+
   if (t.y >= touchAreaBottom()) return;  // ボタンの帯。PC へは送らない
   uint32_t now = millis();
   if (now - last_touch_ms < TOUCH_MIN_INTERVAL_MS) return;
   last_touch_ms = now;
   net.sendTouch(t.x, t.y);
-  Serial.printf("[touch] %d,%d\n", t.x, t.y);
 }
 
 // 持ち上げ・振りを見る

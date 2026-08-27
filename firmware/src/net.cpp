@@ -70,17 +70,11 @@ void Net::connectWifi() {
   }
   Serial.printf("[net] WiFi 接続中: %s\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
+  // **繋がるのを待たない。** ここで待つと loop が止まり、その間 M5.update() が
+  // 呼ばれないので、画面のタッチもモード切替のボタンも効かなくなる。
+  // AP が居ないと待ち時間が丸ごと支配して、機体が固まったように見えていた。
+  // 結果は update() が WiFi.status() で拾う
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
-    delay(250);
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[net] WiFi 接続 %s\n", WiFi.localIP().toString().c_str());
-  } else {
-    Serial.println("[net] WiFi 接続できず。あとで再試行します");
-  }
 }
 
 void Net::startAp() {
@@ -112,8 +106,19 @@ void Net::update() {
 #else
   ws.loop();
 
-  // WiFi が切れたら繋ぎ直す
-  if (WiFi.status() != WL_CONNECTED && millis() - last_attempt_ms_ > 10000) {
+  // 繋がった / 切れたを、変わったときだけ知らせる
+  const bool up = WiFi.status() == WL_CONNECTED;
+  if (up != wifi_up_) {
+    wifi_up_ = up;
+    if (up) {
+      Serial.printf("[net] WiFi 接続 %s\n", WiFi.localIP().toString().c_str());
+    } else {
+      Serial.println("[net] WiFi が切れました。繋ぎ直します");
+    }
+  }
+
+  // 繋がっていなければ、間隔を空けて張り直す。待たないので loop は回り続ける
+  if (!up && millis() - last_attempt_ms_ > WIFI_RETRY_MS) {
     last_attempt_ms_ = millis();
     connectWifi();
   }

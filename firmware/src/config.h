@@ -162,3 +162,6 @@ static constexpr float IMU_LIFT_G = 1.4f;
 
 // ---- 再接続 --------------------------------------------------------------
 static constexpr uint32_t WS_RECONNECT_MS = 3000;
+
+// WiFi を繋ぎ直す間隔。**待つのは loop の外**（net.cpp は待たない）
+static constexpr uint32_t WIFI_RETRY_MS = 10000;

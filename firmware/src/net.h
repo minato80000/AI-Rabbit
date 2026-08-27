@@ -42,6 +42,7 @@ class Net {
 
   bool connected_ = false;
   bool audio_done_pending_ = false;
+  bool wifi_up_ = false;  // 繋がった/切れたを一度だけ知らせるための前回値
   uint32_t last_attempt_ms_ = 0;
 };
 
