@@ -108,7 +108,7 @@ PlatformIO の CLI が PATH にない場合は、VS Code 拡張に同梱のも�
 | | 開発モード | 製品モード |
 |---|---|---|
 | 状態のラベル（idle など） | 出る | 出ない |
-| `PC not connected` | 出る | 右上に小さな橙の点だけ |
+| 繋がっていないときの表示 | 左上に `PC not connected` | 左上に `U-cyber network not connected` |
 | 下端の `DEV - tap below the screen` | 出る | 出ない |
 
 製品モードでも同じ場所を触れば開発モードに戻れます。案内が消えるだけで、

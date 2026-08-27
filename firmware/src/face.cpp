@@ -6,28 +6,25 @@
 
 Face face;
 
+// ---- 顔スタジオで生成 ----
 namespace {
 constexpr int kEyeY = 100;
-constexpr int kEyeDx = 62;
-constexpr int kEyeR = 22;
-constexpr int kMouthY = 170;
+constexpr int kMouthY = 116;
 
-// 送り直す範囲。ここを外すと絵が残るので、描画を変えたら一緒に見直すこと。
-
-// 口が動く範囲。speaking の最大高さ（6 + 34 = 40）と happy の横幅（60）を含む
-constexpr int kMouthBoxW = 72;
-constexpr int kMouthBoxH = 52;
-
-// 目が変わる範囲。surprised の半径（22+5）と thinking の上ずらし（-8）を含む
-constexpr int kEyeBoxW = 192;
-constexpr int kEyeBoxH = 76;
+// 部分転送の範囲。すべての分岐（口は開き最大）の外接矩形から算出した。
+// 描画を変えたら、顔スタジオで出し直すこと。
+constexpr int kMouthBoxW = 138;
+constexpr int kMouthBoxH = 360;
+constexpr int kEyeBoxW = 214;
+constexpr int kEyeBoxH = 74;
 
 uint16_t backgroundFor(LovyanGFX& g, Emotion e) {
   switch (e) {
-    case Emotion::Happy:     return g.color565(20, 40, 28);
-    case Emotion::Puzzled:   return g.color565(38, 32, 20);
-    case Emotion::Surprised: return g.color565(38, 24, 24);
-    default:                 return g.color565(16, 20, 26);
+    case Emotion::Happy:     return g.color565(255, 255, 197);
+    case Emotion::Puzzled:   return g.color565(255, 255, 197);
+    case Emotion::Surprised: return g.color565(255, 255, 197);
+    case Emotion::Sleepy:    return g.color565(255, 255, 197);
+    default:                 return g.color565(255, 255, 197);
   }
 }
 }  // namespace
@@ -45,6 +42,7 @@ Emotion parseEmotion(const char* s) {
   if (strcmp(s, "happy") == 0) return Emotion::Happy;
   if (strcmp(s, "puzzled") == 0) return Emotion::Puzzled;
   if (strcmp(s, "surprised") == 0) return Emotion::Surprised;
+  if (strcmp(s, "sleepy") == 0) return Emotion::Sleepy;
   return Emotion::Neutral;
 }
 
@@ -182,48 +180,95 @@ void Face::render(LovyanGFX& g) {
 
   g.fillScreen(backgroundFor(g, emotion_));
 
+  // ---- 常時 ----
+  g.fillEllipse(cx - 129, 150, 23, 11, TFT_BLACK);
+  g.fillEllipse(cx + 129, 150, 23, 11, TFT_BLACK);
+  g.fillEllipse(cx - 129, 150, 20, 9, g.color565(240, 150, 170));
+  g.fillEllipse(cx + 129, 150, 20, 9, g.color565(240, 150, 170));
+
   // ---- 目 ----
-  const uint16_t eye = TFT_WHITE;
   if (blinking_) {
-    g.fillRoundRect(cx - kEyeDx - kEyeR, kEyeY - 3, kEyeR * 2, 6, 3, eye);
-    g.fillRoundRect(cx + kEyeDx - kEyeR, kEyeY - 3, kEyeR * 2, 6, 3, eye);
+    g.fillRoundRect(cx - 102, 93, 44, 6, 3, TFT_BLACK);
+    g.fillRoundRect(cx + 58, 93, 44, 6, 3, TFT_BLACK);
   } else if (state_ == RobotState::Thinking) {
-    // 考えているときは視線を上へ
-    g.fillCircle(cx - kEyeDx, kEyeY - 8, kEyeR, eye);
-    g.fillCircle(cx + kEyeDx, kEyeY - 8, kEyeR, eye);
-    g.fillCircle(cx - kEyeDx, kEyeY - 14, 8, TFT_BLACK);
-    g.fillCircle(cx + kEyeDx, kEyeY - 14, 8, TFT_BLACK);
+    g.fillCircle(cx - 80, 90, 22, TFT_BLACK);
+    g.fillCircle(cx + 80, 90, 22, TFT_BLACK);
+    g.fillCircle(cx - 90, 80, 6, TFT_WHITE);
+    g.fillCircle(cx + 70, 80, 6, TFT_WHITE);
   } else if (emotion_ == Emotion::Surprised) {
-    g.fillCircle(cx - kEyeDx, kEyeY, kEyeR + 5, eye);
-    g.fillCircle(cx + kEyeDx, kEyeY, kEyeR + 5, eye);
-    g.fillCircle(cx - kEyeDx, kEyeY, 9, TFT_BLACK);
-    g.fillCircle(cx + kEyeDx, kEyeY, 9, TFT_BLACK);
+    g.fillCircle(cx - 80, 90, 27, TFT_BLACK);
+    g.fillCircle(cx + 80, 90, 27, TFT_BLACK);
+    g.fillCircle(cx - 90, 80, 10, TFT_WHITE);
+    g.fillCircle(cx + 70, 80, 10, TFT_WHITE);
   } else {
-    g.fillCircle(cx - kEyeDx, kEyeY, kEyeR, eye);
-    g.fillCircle(cx + kEyeDx, kEyeY, kEyeR, eye);
-    g.fillCircle(cx - kEyeDx, kEyeY + 4, 9, TFT_BLACK);
-    g.fillCircle(cx + kEyeDx, kEyeY + 4, 9, TFT_BLACK);
+    g.fillCircle(cx - 80, 90, 22, TFT_BLACK);
+    g.fillCircle(cx + 80, 90, 22, TFT_BLACK);
+    g.fillCircle(cx - 90, 80, 6, TFT_WHITE);
+    g.fillCircle(cx + 70, 80, 6, TFT_WHITE);
   }
 
   // ---- 口 ----
-  const uint16_t mouth = g.color565(240, 150, 170);
   if (state_ == RobotState::Speaking) {
-    int h = 6 + (int)(mouth_ * 34.0f);
-    g.fillRoundRect(cx - 26, kMouthY - h / 2, 52, h, 8, mouth);
+    int h = 0 + (int)(mouth_ * 93.0f);   // 縦半径
+    int h2 = 0 + (int)(mouth_ * 90.0f);   // 縦半径
+    g.fillEllipse(cx, 130, 38, h, TFT_BLACK);
+    g.fillEllipse(cx, 130, 35, h2, g.color565(255, 178, 174));
+    g.fillEllipse(cx - 26, 113, 32, 23, TFT_BLACK);
+    g.fillEllipse(cx + 26, 113, 32, 23, TFT_BLACK);
+    g.fillEllipse(cx - 26, 113, 29, 20, g.color565(255, 255, 197));
+    g.fillEllipse(cx + 26, 113, 29, 20, g.color565(255, 255, 197));
+    g.fillRect(cx - 57, -64, 115, 177, g.color565(255, 255, 197));
+    g.fillRect(cx - 69, 109, 22, 23, g.color565(255, 255, 197));
+    g.fillRect(cx + 47, 109, 22, 23, g.color565(255, 255, 197));
+    g.fillEllipse(cx, 110, 6, 4, TFT_BLACK);
+    g.fillEllipse(cx, 110, 4, 2, g.color565(240, 150, 170));
   } else if (emotion_ == Emotion::Happy) {
-    g.fillRoundRect(cx - 30, kMouthY - 4, 60, 10, 5, mouth);
+    g.fillCircle(cx, 125, 47, TFT_BLACK);
+    g.fillCircle(cx, 125, 44, g.color565(255, 178, 174));
+    g.fillEllipse(cx - 26, 113, 32, 23, TFT_BLACK);
+    g.fillEllipse(cx + 26, 113, 32, 23, TFT_BLACK);
+    g.fillEllipse(cx - 26, 113, 29, 20, g.color565(255, 255, 197));
+    g.fillEllipse(cx + 26, 113, 29, 20, g.color565(255, 255, 197));
+    g.fillRect(cx - 57, 61, 115, 58, g.color565(255, 255, 197));
+    g.fillRect(cx - 69, 109, 22, 23, g.color565(255, 255, 197));
+    g.fillRect(cx + 47, 109, 22, 23, g.color565(255, 255, 197));
+    g.fillEllipse(cx, 110, 6, 4, TFT_BLACK);
+    g.fillEllipse(cx, 110, 4, 2, g.color565(240, 150, 170));
   } else if (emotion_ == Emotion::Puzzled) {
-    g.fillRoundRect(cx - 18, kMouthY, 36, 7, 3, mouth);
+    g.fillCircle(cx + 2, 90, 47, TFT_BLACK);
+    g.fillCircle(cx + 2, 90, 44, g.color565(255, 178, 174));
+    g.fillEllipse(cx - 26, 113, 32, 23, TFT_BLACK);
+    g.fillEllipse(cx + 26, 113, 32, 23, TFT_BLACK);
+    g.fillEllipse(cx - 26, 113, 29, 20, g.color565(255, 255, 197));
+    g.fillEllipse(cx + 26, 113, 29, 20, g.color565(255, 255, 197));
+    g.fillRect(cx - 56, 40, 114, 73, g.color565(255, 255, 197));
+    g.fillRect(cx - 63, 107, 22, 23, g.color565(255, 255, 197));
+    g.fillRect(cx + 41, 107, 22, 23, g.color565(255, 255, 197));
+    g.fillEllipse(cx, 110, 6, 4, TFT_BLACK);
+    g.fillEllipse(cx, 110, 4, 2, g.color565(240, 150, 170));
   } else {
-    g.fillRoundRect(cx - 22, kMouthY - 3, 44, 7, 3, mouth);
+    g.fillCircle(cx, 125, 47, TFT_BLACK);
+    g.fillCircle(cx, 125, 44, g.color565(255, 178, 174));
+    g.fillEllipse(cx - 26, 113, 32, 23, TFT_BLACK);
+    g.fillEllipse(cx + 26, 113, 32, 23, TFT_BLACK);
+    g.fillEllipse(cx - 26, 113, 29, 20, g.color565(255, 255, 197));
+    g.fillEllipse(cx + 26, 113, 29, 20, g.color565(255, 255, 197));
+    g.fillRect(cx - 57, 61, 115, 58, g.color565(255, 255, 197));
+    g.fillRect(cx - 69, 109, 22, 23, g.color565(255, 255, 197));
+    g.fillRect(cx + 47, 109, 22, 23, g.color565(255, 255, 197));
+    g.fillEllipse(cx, 110, 6, 4, TFT_BLACK);
+    g.fillEllipse(cx, 110, 4, 2, g.color565(240, 150, 170));
   }
 
   // ---- ここから下は開発モードだけ ----
   if (mode_ != DisplayMode::Dev) {
-    // 製品モードでは文字を出さない。ただし繋がっていないことが
-    // まったく分からないと困るので、隅に小さく印だけ残す
+    // 製品モードでは state のラベルを出さない。ただし繋がっていないことが
+    // まったく分からないと困るので、それだけは文字で出す
     if (!connected_) {
-      g.fillCircle(g.width() - 9, 9, 3, g.color565(230, 140, 90));
+      g.setTextSize(1);
+      g.setTextDatum(textdatum_t::top_left);
+      g.setTextColor(g.color565(230, 140, 90));
+      g.drawString("U-cyber network not connected", 6, 6);
     }
     return;
   }
@@ -244,9 +289,6 @@ void Face::render(LovyanGFX& g) {
     g.drawString("PC not connected", 6, 20);
   }
 
-  // 切り替えられることが分かるように出しておく。ボタンは画面の外
-  // （下の見えない帯）にあるので、場所ではなく文で示す。
-  // 製品モードでは消えるが、同じ場所を触れば戻ってこられる
   g.setTextDatum(textdatum_t::bottom_center);
   g.setTextColor(g.color565(96, 106, 116));
   g.drawString("DEV - tap below the screen", cx, g.height() - 3);
