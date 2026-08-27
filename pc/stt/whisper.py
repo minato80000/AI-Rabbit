@@ -52,6 +52,7 @@ class Whisper:
         compute_type: str = "int8_float16",
         language: str = "ja",
         initial_prompt: str | None = None,
+        conversation_prompt: str | None = None,
         beam_size: int = 1,
         no_speech_threshold: float = 0.6,
         hallucination_patterns: list[str] | None = None,
@@ -84,8 +85,14 @@ class Whisper:
         self.reject_dir = rec / "rejected"
         self.heard_dir = rec / "heard"
         # 固有名詞を先に見せておくと綴りが安定する。
-        # これがないと「ウサちゃん」が「おさちゃん」になり、名前を呼んでも反応しない。
+        # ただし**常時**渡してはいけない。呼ばれる前は物音しか来ないので、
+        # そこにプロンプトの言葉が生えて誤反応する（実測：空で終わる件数が
+        # 84 → 40 に減った ＝ 物音が「言葉」になった）。既定は null。
         self.initial_prompt = initial_prompt
+        # 会話が始まってから使うプロンプト。相手が話しかけていることが
+        # 分かっている区間だけなので、上の副作用が出ない。
+        # 実測（2026-08-26）で誤り率 7.2% → 3.3%。詳細は docs/core-mic.md
+        self.conversation_prompt = conversation_prompt
 
         self.device, self.compute_type = self._load(model, device, compute_type)
 
@@ -99,7 +106,7 @@ class Whisper:
         try:
             self.model = WhisperModel(model, device=device, compute_type=compute_type)
             # ロードが通っても最初の推論で落ちることがあるので、ここで一度回す
-            self._transcribe_sync(np.zeros(16000, dtype=np.float32))
+            self._transcribe_sync(np.zeros(16000, dtype=np.float32), None)
         except Exception as e:
             if device != "cuda":
                 raise
@@ -113,14 +120,14 @@ class Whisper:
         )
         return device, compute_type
 
-    def _transcribe_sync(self, audio: np.ndarray) -> str:
+    def _transcribe_sync(self, audio: np.ndarray, prompt: str | None) -> str:
         segments, _ = self.model.transcribe(
             audio,
             language=self.language,
             beam_size=self.beam_size,
             vad_filter=False,     # 区間切り出しは Silero VAD 側で済んでいる
             condition_on_previous_text=False,  # 前文脈の引きずりによる幻聴を防ぐ
-            initial_prompt=self.initial_prompt,
+            initial_prompt=prompt,
         )
 
         # faster-whisper 組み込みの no_speech_threshold は avg_logprob との
@@ -193,13 +200,26 @@ class Whisper:
                 return pat
         return None
 
-    async def transcribe(self, audio: np.ndarray) -> str:
+    def prompt_for(self, in_conversation: bool) -> str | None:
+        """この区間に渡すプロンプトを選ぶ。
+
+        **会話中かどうかで変える。** 呼ばれる前の区間はほとんどが物音で、
+        そこに語彙を見せると物音が言葉になって誤反応する。会話が始まって
+        いれば相手が話しかけていることが分かっているので、その副作用が無い。
+        """
+        if in_conversation and self.conversation_prompt:
+            return self.conversation_prompt
+        return self.initial_prompt
+
+    async def transcribe(self, audio: np.ndarray, in_conversation: bool = False) -> str:
         """float32 mono 16kHz を受け取って文字列を返す。"""
         loop = asyncio.get_running_loop()
+        prompt = self.prompt_for(in_conversation)
         t0 = time.perf_counter()
-        text = await loop.run_in_executor(None, self._transcribe_sync, audio)
+        text = await loop.run_in_executor(None, self._transcribe_sync, audio, prompt)
         log.debug(
-            "stt: %.0fms for %.1fs audio -> %r",
+            "stt: %.0fms for %.1fs audio -> %r%s",
             (time.perf_counter() - t0) * 1000, len(audio) / 16000, text,
+            "（語彙プロンプトあり）" if prompt else "",
         )
         return text

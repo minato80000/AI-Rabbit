@@ -290,12 +290,21 @@ class Rabbit:
                 break
         self.segmenter.reset()
 
-    async def handle(self, audio) -> None:
+    async def handle(self, audio) -> bool:
+        """1区間を処理する。実際に声を出したかを返す。
+
+        返り値で「捨ててよい入力かどうか」が決まる。喋っていなければ、
+        文字起こしのあいだに届いた音は本物の呼びかけかもしれないので残す。
+        """
         self.state.set(State.THINKING)
-        text = await self.stt.transcribe(audio)
+        # 会話中かどうかでプロンプトを変える。呼ばれる前に語彙を見せると
+        # 物音に文字が生えるため（pc/stt/whisper.py の prompt_for）
+        text = await self.stt.transcribe(
+            audio, in_conversation=self.wake.conversation_active
+        )
         if not text:
             self.state.set(State.IDLE)
-            return
+            return False
 
         if self.cfg["debug"]["print_transcript"]:
             mark = "*" if self.wake.conversation_active else " "
@@ -304,14 +313,20 @@ class Rabbit:
         result = self.wake.check(text)
         if not result.addressed:
             self.state.set(State.IDLE)
-            return
+            return False
 
         self.wake.touch()
-        if result.query:
-            await self.respond(result.query)
-        else:
-            await self.say(self.cfg["wake"]["greeting"])
+        # ここから先は必ず音が出る。半二重なので耳を閉じる
+        self.mic.paused = True
+        try:
+            if result.query:
+                await self.respond(result.query)
+            else:
+                await self.say(self.cfg["wake"]["greeting"])
+        finally:
+            self.mic.paused = False
         self.wake.touch()  # 応答にかかった時間ぶん会話ウィンドウを延ばす
+        return True
 
     async def _wait_client(self) -> None:
         """ロボットのマイクを使うときは、繋がるまで待たないと何も聞こえない。"""
@@ -380,15 +395,23 @@ class Rabbit:
         try:
             self.state.set(State.IDLE)
             async for audio in self.segmenter.utterances():
-                # 処理・発話中はマイクを閉じる（自分の声を拾わないため）。
-                # mic.paused でコールバック側から止めることで、この間の
-                # フレームがキューに溜まらないようにする
+                # 切り出しは止める（処理中に次の区間を作らせない）が、
+                # **マイクは閉じない。** 閉じるのは実際に喋る直前だけ。
+                # マイクの開閉は I2S の付け替え（M5.Speaker.end()）を伴い、
+                # 開き直すたびにウォームアップ 120ms が乗る。物音由来の区間は
+                # 文字起こしが空で返って何も喋らずに終わるので、そこで閉じると
+                # 「聞こえない時間」を無駄に作り、直後の発話の頭が欠ける
                 self.segmenter.enabled = False
-                self.mic.paused = True
+                spoke = False
                 try:
-                    await self.handle(audio)
+                    spoke = await self.handle(audio)
                 finally:
-                    self._flush_input()
+                    # **喋ったときだけ捨てる。** 自分の声の残りを拾わないための
+                    # 掃除であって、聞き逃しを作るためのものではない。
+                    # 物音で終わった区間まで捨てると、その推論（medium で 1 区間
+                    # 700ms 前後）のあいだに来た本物の呼びかけが消える
+                    if spoke:
+                        self._flush_input()
                     self.mic.paused = False
                     self.segmenter.enabled = True
         finally:
