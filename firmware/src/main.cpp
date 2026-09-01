@@ -16,86 +16,28 @@
 #include "mic_in.h"
 #include "net.h"
 
-namespace {
-
-uint32_t last_touch_ms = 0;
-uint32_t last_imu_ms = 0;
-
-// ボタンの帯より上だけを PC へ送る。既定ではボタンは画面の外にあるので、
-// 画面はすべて PC へ渡る
-int touchAreaBottom() {
-  return M5.Display.height() - (int)M5.getTouchButtonHeight();
-}
-
 // 画面より下の見えない帯の中央（BtnB）で、開発モードと製品モードを切り替える。
 // CoreS3 に押しボタンは無く、タッチ面が画面の下まで続いているぶんが
 // BtnA / BtnB / BtnC になっている
-void pollModeButton() {
+void pollModeButton()
+{
   // wasClicked() ではなく wasReleased() を見る。**押している時間で取りこぼす**
   // ため。M5Unified の Button_Class は 500ms（_msecHold）押されると _press を
   // 2（hold）へ上げ、そこから離しても state_clicked にはならない。
   // 効かないときほど長く押したくなるので、離した時点で切り替える
-  if (!M5.BtnB.wasReleased()) return;
+  if (!M5.BtnB.wasReleased())
+    return;
   const bool dev = face.toggleMode() == DisplayMode::Dev;
   Serial.printf("[main] %sモードへ切り替えました\n", dev ? "開発" : "製品");
 }
 
-// 画面に触られたら PC へ知らせる
-void pollTouch() {
-  auto t = M5.Touch.getDetail();
-  if (!t.wasPressed()) return;
-  // モード切替が効かないときの手がかり。BtnA/BtnB/BtnC の判定に使われるのは
-  // 変換後ではなく**生の座標**で、生の y が 240 以上（= 画面より下）のときだけ
-  // 押されたことになる。触れているのに「帯」と出ないなら、そもそも画面より下を
-  // 拾えていない。出るのに切り替わらないなら、押し方かループの遅さのほう
-  const auto raw = M5.Touch.getTouchPointRaw();
-  Serial.printf("[touch] %d,%d (生 %d,%d)%s\n", t.x, t.y, (int)raw.x, (int)raw.y,
-                raw.y >= 240 ? " <- ボタンの帯" : "");
-
-  if (t.y >= touchAreaBottom()) return;  // ボタンの帯。PC へは送らない
-  uint32_t now = millis();
-  if (now - last_touch_ms < TOUCH_MIN_INTERVAL_MS) return;
-  last_touch_ms = now;
-  net.sendTouch(t.x, t.y);
-}
-
-// 持ち上げ・振りを見る
-void pollImu() {
-  if (!M5.Imu.update()) return;
-  uint32_t now = millis();
-  if (now - last_imu_ms < IMU_MIN_INTERVAL_MS) return;
-
-  auto d = M5.Imu.getImuData();
-  float g = sqrtf(d.accel.x * d.accel.x + d.accel.y * d.accel.y +
-                  d.accel.z * d.accel.z);
-
-  const char* event = nullptr;
-  if (g > IMU_SHAKE_G) {
-    event = "shake";
-  } else if (g < IMU_LIFT_G && g > 0.2f) {
-    // 落下方向の加速度が抜けている = 持ち上げられた
-    event = "lift";
-  }
-  if (event == nullptr) return;
-
-  last_imu_ms = now;
-  net.sendImu(event);
-  Serial.printf("[imu] %s (%.2fg)\n", event, g);
-}
-
-}  // namespace
-
-void setup() {
+void setup()
+{
   auto cfg = M5.config();
-  cfg.internal_imu = true;
-  // 構成するだけ。実際に開くのは mic_in が判断する（スピーカーと排他）
+  cfg.output_power = false;
   cfg.internal_mic = true;
   cfg.internal_spk = true;
   M5.begin(cfg);
-
-  // ボタンの範囲を明示しておく。0 なら画面の外（下の見えない帯）だけが
-  // BtnA/BtnB/BtnC になる。値を与えると画面の下端まで巻き込む
-  M5.setTouchButtonHeight(TOUCH_BUTTON_HEIGHT);
 
   Serial.begin(115200);
   delay(200);
@@ -103,14 +45,16 @@ void setup() {
   Serial.printf("=== ウサちゃんロボ CoreS3 fw %s ===\n", FW_VERSION);
 
   face.begin();
-  if (!audio_out.begin()) {
+  if (!audio_out.begin())
+  {
     Serial.println("[main] 音声の初期化に失敗しました");
   }
   mic_in.begin();
   net.begin();
 }
 
-void loop() {
+void loop()
+{
   M5.update();
 
   net.update();
@@ -125,8 +69,6 @@ void loop() {
   face.update();
 
   pollModeButton();
-  pollTouch();
-  pollImu();
 
   delay(2);
 }
