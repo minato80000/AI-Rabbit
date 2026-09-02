@@ -260,15 +260,15 @@ void Face::render(LovyanGFX& g) {
     g.fillEllipse(cx, 110, 4, 2, g.color565(240, 150, 170));
   }
 
-  // ---- ここから下は開発モードだけ ----
-  if (mode_ != DisplayMode::Dev) {
+  // ---- ここから下は開発モードと製品モードの違い ----
+  if (mode_ != DisplayMode::Dev) {//製品モード
     // 製品モードでは state のラベルを出さない。ただし繋がっていないことが
     // まったく分からないと困るので、それだけは文字で出す
     if (!connected_) {
       g.setTextSize(1);
       g.setTextDatum(textdatum_t::top_left);
       g.setTextColor(g.color565(230, 140, 90));
-      g.drawString("U-cyber network not connected", 6, 6);
+      g.drawString("U-cyber space not connected", 6, 6);
     }
     return;
   }
