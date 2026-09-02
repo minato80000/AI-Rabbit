@@ -26,7 +26,8 @@ class AudioOut {
   // 毎ループ呼ぶ。溜まった分をスピーカーへ渡す
   void update();
 
-  // 鳴らし終わったか（endStream 済みで、バッファも空）
+  // 鳴らし終わったか（endStream 済み・バッファが空・DMA も吐き切った）。
+  // マイクへ切り替えてよいかの判定に使う
   bool finished() const;
 
   // 再生中か（口パクに使う）
@@ -51,6 +52,9 @@ class AudioOut {
   bool playing_ = false;
   float level_ = 0.0f;
   uint32_t dropped_ = 0;
+  // 再生キューが空になった時刻。ここから SPEAKER_DRAIN_MS 待って、
+  // DMA に積んだ分が鳴り切るのを見る
+  uint32_t drained_at_ms_ = 0;
 };
 
 extern AudioOut audio_out;

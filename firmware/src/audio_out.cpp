@@ -26,16 +26,22 @@ bool AudioOut::begin() {
   cfg.sample_rate = AUDIO_SAMPLE_RATE;
   cfg.stereo = false;
   // 既定のままだと DMA が浅く、Wi-Fi の到着ゆらぎで音が途切れる。
-  // 深くすると滑らかになるが、その分だけ barge-in の反応が鈍る
-  cfg.dma_buf_len = 512;
-  cfg.dma_buf_count = 16;
+  // 深くすると滑らかになるが、閉じるときに捨てる量もその分だけ増える。
+  // 深さと待ち時間は config.h で対にしてある（SPEAKER_DRAIN_MS）
+  cfg.dma_buf_len = SPEAKER_DMA_BUF_LEN;
+  cfg.dma_buf_count = SPEAKER_DMA_BUF_COUNT;
   cfg.task_priority = 3;  // 描画より優先させる
   M5.Speaker.config(cfg);
   M5.Speaker.begin();
   M5.Speaker.setVolume(200);
 
-  Serial.printf("[audio] リングバッファ %u サンプル (%u ms)\n",
-                (unsigned)capacity_, (unsigned)RINGBUFFER_MS);
+  // まだ何も鳴らしていないので、DMA の待ちは済んだことにしておく。
+  // （unsigned の引き算なので millis() が小さいうちでも正しく回る）
+  drained_at_ms_ = millis() - SPEAKER_DRAIN_MS;
+
+  Serial.printf("[audio] リングバッファ %u サンプル (%u ms) / DMA の吐き切り %u ms\n",
+                (unsigned)capacity_, (unsigned)RINGBUFFER_MS,
+                (unsigned)SPEAKER_DRAIN_MS);
   return true;
 }
 
@@ -96,6 +102,9 @@ void AudioOut::flush() {
   M5.Speaker.stop(SPEAKER_CHANNEL);
   reset();
   streaming_ = false;
+  // 黙らせる指示なので、DMA に残っている分を守る意味はない。待ちを飛ばして
+  // すぐマイクへ切り替えられるようにする（切り替えの end() が DMA ごと捨てる）
+  drained_at_ms_ = millis() - SPEAKER_DRAIN_MS;
 }
 
 void AudioOut::update() {
@@ -128,6 +137,11 @@ void AudioOut::update() {
   }
 
   if (available() == 0 && !M5.Speaker.isPlaying(SPEAKER_CHANNEL)) {
+    if (playing_) {
+      // キューは空になったが、DMA にはまだ積んだ分が残っている。
+      // finished() はここからの経過を見る
+      drained_at_ms_ = millis();
+    }
     playing_ = false;
     level_ = 0.0f;
     started_ = false;
@@ -135,5 +149,9 @@ void AudioOut::update() {
 }
 
 bool AudioOut::finished() const {
-  return !streaming_ && !playing_ && ((head_ + capacity_ - tail_) % capacity_) == 0;
+  if (streaming_ || playing_) return false;
+  if (((head_ + capacity_ - tail_) % capacity_) != 0) return false;
+  // キューが空でも DMA には残っている。ここで待たないと、マイクへ切り替える
+  // ときの M5.Speaker.end() に語尾を持っていかれる
+  return (millis() - drained_at_ms_) >= SPEAKER_DRAIN_MS;
 }
