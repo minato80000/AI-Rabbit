@@ -129,6 +129,20 @@ transport:
   chunk_ms: 20              # 送信する PCM チャンクの長さ
   wait_client_sec: 0        # --text 実行時に接続を待つ秒数（0 で待たない）
 
+# 聞き取った言葉と返事を iPad などのブラウザに出す（pc/display）。
+# iPad を PC と同じ WiFi に参加させ、Safari で http://<PCのIP>:<port>/ を開く。
+# 開く URL は起動時に表示される。hotspot なら http://192.168.137.1:8780/
+display:
+  enabled: true
+  host: "0.0.0.0"
+  # CoreS3 との接続（transport.port）とは別のポート
+  port: 8780
+  # ページを開き直したときに送り直す件数（聞き取り・返事の1文がそれぞれ1件）
+  history: 50
+  # 呼びかけと判定されなかった言葉も薄く出す。部屋の会話がそのまま
+  # 画面に流れるのが嫌なら false（ページ側のボタンでも隠せる）
+  show_unaddressed: true
+
 behavior:
   # 音声での割り込みは実装しない。ロボットのマイクとスピーカーは I2S を
   # 共有していて同時に開けないため、喋っている間は聞いていない（半二重）。

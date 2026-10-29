@@ -63,6 +63,56 @@ git config core.hooksPath tools/hooks
 - `ウサちゃん` だけ — 「はい、なんでしょう？」と返して待つ
 - 一度会話が始まったら **20秒間は呼びかけ不要**（`config.yaml` の `conversation_window_sec`）
 
+## 会話を iPad に表示する
+
+ロボットが**聞き取った言葉**と**返事**を、iPad の画面に吹き出しで出せます。
+アプリは要りません。Safari でページを開くだけです。
+
+1. iPad を PC と**同じ WiFi** に参加させる
+   - `hotspot`（既定）なら PC のホットスポットに。ロボットと同じ SSID
+   - `robot-ap` ならロボットの SSID に（PC と同じ網になる）
+   - `router` なら家の WiFi に
+2. `pc.main` を起動すると、開く URL が出る
+
+   ```
+   会話の表示: iPad の Safari で開いてください（同じ WiFi に参加しておくこと）
+     http://192.168.137.1:8780/
+   ```
+
+3. その URL を iPad の Safari で開く
+
+| 表示 | 意味 |
+|---|---|
+| 左の白い吹き出し | 聞き取った言葉（呼びかけと判定されたもの） |
+| 右のピンクの吹き出し | ウサちゃんの返事。喋るのと同じく1文ずつ伸びる |
+| 点線の薄い吹き出し | 聞こえたが、呼びかけではないので聞き流した言葉 |
+| 上部の顔と文言 | いまの状態（待っています / 考えています / お話ししています） |
+
+- **聞き取りの精度を確かめるのにも使えます。** 「言ったこと」と「聞こえたこと」が
+  その場で並ぶので、`--check-mic` を回すまでもなく崩れ方が分かります
+- 聞き流した言葉は、右上のボタンで隠せます（端末ごとに覚えます）。
+  部屋の会話を一切画面に出したくないなら `display.show_unaddressed: false`
+- ページを開き直しても直近 50 件（`display.history`）は送り直されます。
+  PC を再起動しても、ページは開いたままで勝手に繋がり直します
+- 共有ボタン →「ホーム画面に追加」で、アドレスバーなしの全画面で開けます
+- 画面が消えるのが困るなら、iPad の 設定 > 画面表示と明るさ > 自動ロック を「なし」に
+
+ロボットなしで見た目だけ確かめるなら、ダミーの会話を流すデモがあります。
+
+```powershell
+.venv\Scripts\python -m pc.display.server
+```
+
+**繋がらないとき**: まず PC の `http://127.0.0.1:8780/` が開くか確かめます。
+PC では開くのに iPad から開けないなら、ファイアウォールで塞がれています。
+管理者の PowerShell で受信ポートを開けてください。
+
+```powershell
+.\tools\hotspot.ps1 -Action Firewall -Port 8780
+```
+
+表示が要らないときは `display.enabled: false` で止まります（ポートも開きません）。
+
 ## ペルソナの調整
 
 **このリポジトリは public なので、ペルソナは3層に分かれています。**
@@ -223,6 +273,7 @@ PC からは鳴りません。
 ```powershell
 .venv\Scripts\python tools\protocol_test.py    # 出力側 27項目
 .venv\Scripts\python tools\core_mic_test.py    # マイク側 15項目
+.venv\Scripts\python tools\display_test.py     # iPad 表示 13項目
 ```
 
 状態 push・音声転送・flush・イベント・再接続・誤パス拒否と、マイクの開閉指示・
@@ -237,6 +288,7 @@ CoreS3 のファームを書くときは、この仕様に合わせてくださ�
 | 項目 | 説明 |
 |---|---|
 | `transport.link` | 繋ぎ方。`hotspot`（既定・ルータ不要）/ `robot-ap` / `router`。[接続](../docs/wireless-link.md) |
+| `display.enabled` | 会話を iPad に表示する（既定 `true`）。ポートは `display.port`（既定 8780） |
 | `audio.input` | `coreS3`（既定）= ロボットのマイク / `local` = PC のマイク |
 | `audio.input_gain` | ロボットの音が小さいとき。まずファーム側の `MIC_MAGNIFICATION` |
 | `wake.words` | ウェイクワード。ひらがなで書く（カタカナ・漢字は自動で吸収） |
@@ -452,3 +504,5 @@ LLM と合わせて 3616/4096 MiB に収まります。
 | `llm/client.py` | Ollama / Claude の切り替え |
 | `llm/sentence.py` | ストリームの文分割・感情タグ抽出・TTS サニタイズ |
 | `tts/voicevox.py` | VOICEVOX |
+| `display/server.py` | 会話を iPad のブラウザに流す。HTTP と WebSocket を同じポートで待つ |
+| `display/index.html` | iPad に出すページ |

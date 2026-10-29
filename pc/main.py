@@ -21,6 +21,7 @@ from .audio.player import Player
 from .audio.remote_mic import RemoteMic
 from .audio.sink import NullSink, TeeSink
 from .audio.vad import UtteranceSegmenter
+from .display import TranscriptDisplay
 from .llm import client as llm_client
 from .llm.sentence import SentenceStreamer
 from .state import EMOTION_TO_TAG, Emotion, State, StateMachine
@@ -163,6 +164,17 @@ class Rabbit:
         if not self.sink.sinks:
             self.sink = NullSink()
 
+        # 聞き取った言葉と返事を iPad などのブラウザに出す（pc/display）
+        self.display: TranscriptDisplay | None = None
+        dcfg = cfg.get("display") or {}
+        if dcfg.get("enabled", False):
+            self.display = TranscriptDisplay(
+                host=dcfg.get("host", "0.0.0.0"),
+                port=dcfg.get("port", 8780),
+                history=dcfg.get("history", 50),
+                show_unaddressed=dcfg.get("show_unaddressed", True),
+            )
+
         self.stt: Whisper | None = None
         self.mic: Mic | RemoteMic | None = None
         self.segmenter: UtteranceSegmenter | None = None
@@ -171,6 +183,8 @@ class Rabbit:
         log.debug("state -> %s / %s", state.value, emotion.value)
         if self.link is not None:
             self.link.push_state(state.value, emotion.value)
+        if self.display is not None:
+            self.display.push_state(state.value, emotion.value)
 
     def _on_core_event(self, ev: dict) -> None:
         """CoreS3 から届いたイベント。Step 5 でタッチ起動などに使う。"""
@@ -215,6 +229,8 @@ class Rabbit:
     async def _emit(self, text: str, emotion: Emotion) -> None:
         self.state.set(State.SPEAKING, emotion)
         print(f"  ウサちゃん> {text}")
+        if self.display is not None:
+            self.display.reply(text, emotion.value)
         pcm = await self.tts.synth(text)
         self.sink.enqueue(pcm)   # ここで初めて音が出る
 
@@ -222,7 +238,12 @@ class Rabbit:
         """固定セリフを喋る。"""
         await self._emit(text, emotion)
         await self.sink.drain()
+        self._end_reply()
         self.state.set(State.IDLE)
+
+    def _end_reply(self) -> None:
+        if self.display is not None:
+            self.display.reply_end()
 
     async def respond(self, query: str) -> None:
         """LLM の返答を文単位で合成・再生する。全文は待たない。"""
@@ -266,6 +287,7 @@ class Rabbit:
             await self._emit("あれ、うまく考えられないのだ", Emotion.PUZZLED)
 
         await self.sink.drain()
+        self._end_reply()
         self.state.set(State.IDLE)
 
         if spoken:
@@ -302,6 +324,8 @@ class Rabbit:
             print(f"{mark} あなた   > {text}")
 
         result = self.wake.check(text)
+        if self.display is not None:
+            self.display.heard(text, result.addressed)
         if not result.addressed:
             self.state.set(State.IDLE)
             return
@@ -362,6 +386,15 @@ class Rabbit:
                 print("  （PC の WiFi をロボットの SSID に切り替えておいてください）")
             print("  （実機がなければ tools/dummy_core.py で代用できます）")
 
+        if self.display is not None:
+            urls = self.display.urls()
+            print()
+            print("  会話の表示: iPad の Safari で開いてください（同じ WiFi に参加しておくこと）")
+            for url in urls:
+                print(f"    {url}")
+            if not urls:
+                print(f"    http://<このPCのIP>:{self.display.port}/")
+
         if self.input_source == "coreS3":
             await self._wait_client()
 
@@ -400,12 +433,16 @@ class Rabbit:
             self.player.start()
         if self.link is not None:
             await self.link.start()
+        if self.display is not None:
+            await self.display.start()
 
     async def stop_output(self) -> None:
         if self.player is not None:
             self.player.stop()
         if self.link is not None:
             await self.link.stop()
+        if self.display is not None:
+            await self.display.stop()
 
     async def aclose(self) -> None:
         await self.llm.aclose()

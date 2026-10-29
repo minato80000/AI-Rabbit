@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- ホーム画面に追加すると、アドレスバーなしの全画面で開ける -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ウサちゃん">
+<title>ウサちゃんの会話</title>
+<style>
+  :root {
+    --bg: #fbf7f4;
+    --fg: #2b2622;
+    --muted: #8a817a;
+    --you-bg: #ffffff;
+    --you-border: #e4dcd5;
+    --rabbit-bg: #ffe3ec;
+    --rabbit-fg: #3a1f28;
+    --dim: #b8afa8;
+    --accent: #e86a92;
+    --ok: #3aa76d;
+    --ng: #c94b4b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1716;
+      --fg: #efe9e4;
+      --muted: #9a918a;
+      --you-bg: #2a2523;
+      --you-border: #3a3330;
+      --rabbit-bg: #4a2634;
+      --rabbit-fg: #ffe9f0;
+      --dim: #6b625c;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+    display: flex;
+    flex-direction: column;
+    -webkit-text-size-adjust: 100%;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: calc(env(safe-area-inset-top) + 12px) 20px 12px;
+    border-bottom: 1px solid var(--you-border);
+  }
+  #face { font-size: 34px; line-height: 1; min-width: 3.4em; text-align: center; }
+  #status { font-size: 20px; font-weight: 600; flex: 1; }
+  #conn { font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  #conn::before {
+    content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--ng);
+  }
+  #conn.on::before { background: var(--ok); }
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 20px calc(env(safe-area-inset-bottom) + 20px);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .row { display: flex; flex-direction: column; max-width: 82%; }
+  .row.you { align-self: flex-start; }
+  .row.rabbit { align-self: flex-end; align-items: flex-end; }
+  .who { font-size: 14px; color: var(--muted); margin: 0 8px 4px; }
+  .bubble {
+    font-size: clamp(22px, 3.2vw, 34px);
+    line-height: 1.5;
+    padding: 12px 18px;
+    border-radius: 22px;
+    overflow-wrap: anywhere;
+  }
+  .you .bubble { background: var(--you-bg); border: 1px solid var(--you-border); border-bottom-left-radius: 6px; }
+  .rabbit .bubble { background: var(--rabbit-bg); color: var(--rabbit-fg); border-bottom-right-radius: 6px; }
+  .rabbit.live .bubble::after { content: " …"; color: var(--accent); }
+  /* 呼びかけと判定されなかったもの。聞こえてはいる、と分かる程度に薄く */
+  .row.ignored { max-width: 70%; }
+  .ignored .bubble {
+    font-size: clamp(16px, 2.2vw, 22px);
+    color: var(--dim);
+    background: transparent;
+    border: 1px dashed var(--you-border);
+  }
+  #empty { margin: auto; text-align: center; color: var(--muted); font-size: 22px; line-height: 1.8; }
+  #toggle {
+    font: inherit; font-size: 14px; color: var(--muted);
+    background: none; border: 1px solid var(--you-border); border-radius: 999px; padding: 6px 12px;
+  }
+  body.hide-ignored .ignored { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div id="face">( ･ω･)</div>
+  <div id="status">接続しています…</div>
+  <button id="toggle" type="button">聞き流した言葉: 表示</button>
+  <div id="conn">未接続</div>
+</header>
+<main id="log">
+  <div id="empty">「ウサちゃん」と話しかけてみてください<br>聞き取った言葉と返事がここに出ます</div>
+</main>
+<script>
+(() => {
+  "use strict";
+  const log = document.getElementById("log");
+  const face = document.getElementById("face");
+  const statusEl = document.getElementById("status");
+  const conn = document.getElementById("conn");
+  const toggle = document.getElementById("toggle");
+  const MAX_ROWS = 200;
+
+  const FACES = { neutral: "( ･ω･)", happy: "( ^ω^ )", puzzled: "( ･ω･)？", surprised: "( ﾟωﾟ)!" };
+  const STATES = { idle: "待っています", listening: "聞いています", thinking: "考えています", speaking: "お話ししています" };
+
+  // 聞き流した言葉の表示は端末ごとに覚える（保存できない環境でも動くように）
+  let hideIgnored = false;
+  try { hideIgnored = localStorage.getItem("hideIgnored") === "1"; } catch (e) {}
+  const applyToggle = () => {
+    document.body.classList.toggle("hide-ignored", hideIgnored);
+    toggle.textContent = "聞き流した言葉: " + (hideIgnored ? "隠す" : "表示");
+  };
+  toggle.addEventListener("click", () => {
+    hideIgnored = !hideIgnored;
+    try { localStorage.setItem("hideIgnored", hideIgnored ? "1" : "0"); } catch (e) {}
+    applyToggle();
+    scrollDown(true);
+  });
+  applyToggle();
+
+  // 一番下を見ているときだけ追従する。遡って読んでいる最中に引き戻さない
+  const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  const scrollDown = (force) => { if (force || stick) log.scrollTop = log.scrollHeight; };
+  let stick = true;
+  log.addEventListener("scroll", () => { stick = atBottom(); });
+
+  let live = null;   // 返事の途中の吹き出し
+
+  function addRow(cls, who, text) {
+    const empty = document.getElementById("empty");
+    if (empty) empty.remove();
+    const row = document.createElement("div");
+    row.className = "row " + cls;
+    const w = document.createElement("div");
+    w.className = "who";
+    w.textContent = who;
+    const b = document.createElement("div");
+    b.className = "bubble";
+    b.textContent = text;
+    row.append(w, b);
+    log.append(row);
+    while (log.children.length > MAX_ROWS) log.firstElementChild.remove();
+    scrollDown(false);
+    return row;
+  }
+
+  function endReply() {
+    if (live) live.classList.remove("live");
+    live = null;
+  }
+
+  function onMessage(m) {
+    switch (m.t) {
+      case "heard":
+        endReply();
+        if (m.addressed) addRow("you", "聞き取った言葉", m.text);
+        else addRow("ignored", "聞き流した言葉", m.text);
+        break;
+      case "reply": {
+        if (!live) live = addRow("rabbit live", "ウサちゃん", "");
+        live.querySelector(".bubble").textContent += m.text;
+        scrollDown(false);
+        break;
+      }
+      case "reply_end":
+        endReply();
+        break;
+      case "state":
+        face.textContent = FACES[m.emotion] || FACES.neutral;
+        statusEl.textContent = STATES[m.v] || m.v;
+        break;
+    }
+  }
+
+  // PC を起動し直しても、ページを開いたままで繋がり直す
+  let retry = 1000;
+  function connect() {
+    const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    ws.onopen = () => {
+      retry = 1000;
+      conn.textContent = "接続中";
+      conn.classList.add("on");
+      // 接続直後に履歴がまとめて届くので、描き直す
+      log.replaceChildren();
+      live = null;
+      stick = true;
+    };
+    ws.onmessage = (ev) => {
+      try { onMessage(JSON.parse(ev.data)); } catch (e) { console.error(e); }
+    };
+    ws.onclose = () => {
+      conn.textContent = "未接続";
+      conn.classList.remove("on");
+      statusEl.textContent = "PC を探しています…";
+      endReply();
+      setTimeout(connect, retry);
+      retry = Math.min(retry * 2, 10000);
+    };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>
