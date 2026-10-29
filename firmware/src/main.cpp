@@ -9,6 +9,7 @@
 // 切り替えは mic_in が持つ。docs/core-mic.md を参照。
 
 #include <M5Unified.h>
+#include <esp_heap_caps.h>
 
 #include "audio_out.h"
 #include "config.h"
@@ -16,90 +17,62 @@
 #include "mic_in.h"
 #include "net.h"
 
-namespace {
-
-uint32_t last_touch_ms = 0;
-uint32_t last_imu_ms = 0;
-
-// ボタンの帯より上だけを PC へ送る。既定ではボタンは画面の外にあるので、
-// 画面はすべて PC へ渡る
-int touchAreaBottom() {
-  return M5.Display.height() - (int)M5.getTouchButtonHeight();
-}
-
 // 画面より下の見えない帯の中央（BtnB）で、開発モードと製品モードを切り替える。
 // CoreS3 に押しボタンは無く、タッチ面が画面の下まで続いているぶんが
 // BtnA / BtnB / BtnC になっている
-void pollModeButton() {
-  if (!M5.BtnB.wasClicked()) return;
+void pollModeButton()
+{
+  // wasClicked() ではなく wasReleased() を見る。**押している時間で取りこぼす**
+  // ため。M5Unified の Button_Class は 500ms（_msecHold）押されると _press を
+  // 2（hold）へ上げ、そこから離しても state_clicked にはならない。
+  // 効かないときほど長く押したくなるので、離した時点で切り替える
+  if (!M5.BtnB.wasReleased())
+    return;
   const bool dev = face.toggleMode() == DisplayMode::Dev;
   Serial.printf("[main] %sモードへ切り替えました\n", dev ? "開発" : "製品");
 }
 
-// 画面に触られたら PC へ知らせる
-void pollTouch() {
-  auto t = M5.Touch.getDetail();
-  if (!t.wasPressed()) return;
-  if (t.y >= touchAreaBottom()) return;  // ボタンの帯。PC へは送らない
-  uint32_t now = millis();
-  if (now - last_touch_ms < TOUCH_MIN_INTERVAL_MS) return;
-  last_touch_ms = now;
-  net.sendTouch(t.x, t.y);
-  Serial.printf("[touch] %d,%d\n", t.x, t.y);
-}
-
-// 持ち上げ・振りを見る
-void pollImu() {
-  if (!M5.Imu.update()) return;
-  uint32_t now = millis();
-  if (now - last_imu_ms < IMU_MIN_INTERVAL_MS) return;
-
-  auto d = M5.Imu.getImuData();
-  float g = sqrtf(d.accel.x * d.accel.x + d.accel.y * d.accel.y +
-                  d.accel.z * d.accel.z);
-
-  const char* event = nullptr;
-  if (g > IMU_SHAKE_G) {
-    event = "shake";
-  } else if (g < IMU_LIFT_G && g > 0.2f) {
-    // 落下方向の加速度が抜けている = 持ち上げられた
-    event = "lift";
-  }
-  if (event == nullptr) return;
-
-  last_imu_ms = now;
-  net.sendImu(event);
-  Serial.printf("[imu] %s (%.2fg)\n", event, g);
-}
-
-}  // namespace
-
-void setup() {
+void setup()
+{
   auto cfg = M5.config();
-  cfg.internal_imu = true;
-  // 構成するだけ。実際に開くのは mic_in が判断する（スピーカーと排他）
+  cfg.output_power = false;
   cfg.internal_mic = true;
   cfg.internal_spk = true;
   M5.begin(cfg);
-
-  // ボタンの範囲を明示しておく。0 なら画面の外（下の見えない帯）だけが
-  // BtnA/BtnB/BtnC になる。値を与えると画面の下端まで巻き込む
-  M5.setTouchButtonHeight(TOUCH_BUTTON_HEIGHT);
 
   Serial.begin(115200);
   delay(200);
   Serial.println();
   Serial.printf("=== ウサちゃんロボ CoreS3 fw %s ===\n", FW_VERSION);
 
+  // PSRAM が見えていないと、顔のスプライト 150KB と音声リングバッファ 48KB が
+  // 内蔵 RAM (320KB) から取られる。WiFi に回る分が減るので、この状態で音や
+  // 通信を評価すると判断を誤る。
+  //
+  // **書き込み直後は必ずこうなる。** esptool は RTS でリセットするだけで電源を
+  // 落とさず、ESP32-S3 の OPI PSRAM は電源が切れないリセットだとブートローダの
+  // ID 読みに応答しないことがある（コールドブートなら出ない）
+  // **psramFound() は使わない。** 初期化に失敗していても true を返すことが
+  // あり、実測でそうなった（face は PSRAM、audio は内蔵RAM と、同じ起動で
+  // 食い違って出た）。実際に確保できる領域があるかを見る
+  if (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) == 0)
+  {
+    Serial.println("[main] PSRAM が見えていません。電源を入れ直してください");
+    Serial.println("[main] 書き込み直後のリセットではよく起きます。"
+                   "この状態の音や通信は当てになりません");
+  }
+
   face.begin();
-  if (!audio_out.begin()) {
+  if (!audio_out.begin())
+  {
     Serial.println("[main] 音声の初期化に失敗しました");
   }
   mic_in.begin();
   net.begin();
 }
 
-void loop() {
+void loop()
+{
   M5.update();
 
   net.update();
@@ -114,8 +87,6 @@ void loop() {
   face.update();
 
   pollModeButton();
-  pollTouch();
-  pollImu();
 
   delay(2);
 }

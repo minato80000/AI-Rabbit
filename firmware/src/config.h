@@ -99,6 +99,24 @@ static constexpr size_t SPEAKER_CHUNK_SAMPLES = 512;
 // 散らばって同時再生され、音が壊れる。1つに固定すること
 static constexpr int SPEAKER_CHANNEL = 0;
 
+// スピーカーの I2S DMA の深さ。M5Unified の既定は 256 x 8 で、それだと浅く
+// Wi-Fi の到着ゆらぎで音が途切れる。深くすると滑らかになるが、**深さが
+// そのまま末尾の切り捨て量になる**（下の SPEAKER_DRAIN_MS）。増やすときは
+// 「喋り終わってから聞けるまで」が同じだけ延びることを承知しておくこと
+static constexpr size_t SPEAKER_DMA_BUF_LEN = 512;
+static constexpr size_t SPEAKER_DMA_BUF_COUNT = 8;
+
+// DMA が鳴り終わるまでの見積もり。**マイクへ切り替える前にこれだけ待つ。**
+//
+// M5.Speaker.isPlaying(ch) は再生キューの2枠しか見ておらず（M5Unified の
+// Speaker_Class.hpp が _slot_occupied を2つ足しているだけ）、DMA へ積んだ分は
+// 数えない。そのため最後のチャンクを渡した時点で「鳴り終わった」に見える。
+// そこで M5.Speaker.end() を呼ぶと（mic_in が I2S を奪うときに呼ぶ）、end() は
+// i2s_stop() してから uninstall するだけで吐き切りを待たないため、DMA に
+// 残っていた分は鳴らずに捨てられる。**語尾が切れるのはこれが原因だった。**
+static constexpr uint32_t SPEAKER_DRAIN_MS =
+    (uint32_t)(SPEAKER_DMA_BUF_LEN * SPEAKER_DMA_BUF_COUNT * 1000 / AUDIO_SAMPLE_RATE) + 40;
+
 // ---- マイク --------------------------------------------------------------
 // この機体のマイクで聞く。マイクとスピーカーは I2S1 と BCK/WS ピンを共有して
 // いて同時には開けない（M5Unified の CoreS3 定義でどちらも
@@ -162,3 +180,6 @@ static constexpr float IMU_LIFT_G = 1.4f;
 
 // ---- 再接続 --------------------------------------------------------------
 static constexpr uint32_t WS_RECONNECT_MS = 3000;
+
+// WiFi を繋ぎ直す間隔。**待つのは loop の外**（net.cpp は待たない）
+static constexpr uint32_t WIFI_RETRY_MS = 10000;

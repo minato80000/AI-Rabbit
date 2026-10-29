@@ -16,11 +16,11 @@
 #include <stdint.h>
 
 enum class RobotState : uint8_t { Idle, Listening, Thinking, Speaking };
-enum class Emotion : uint8_t { Neutral, Happy, Puzzled, Surprised };
+enum class Emotion : uint8_t { Neutral, Happy, Puzzled, Surprised, Sleepy };
 
 // 画面の見せ方。起動時は Dev。
 //   Dev     : state のラベルや接続状態を顔に重ねる。開発中に見たい情報
-//   Product : 顔だけ。人に見せる状態
+//   Product : 顔だけ。人に見せる状態。繋がっていないときの一文だけは残る
 // 切り替えは画面下中央のタッチ（BtnB）。main.cpp を参照
 enum class DisplayMode : uint8_t { Dev, Product };
 
