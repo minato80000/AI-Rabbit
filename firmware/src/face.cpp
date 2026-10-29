@@ -1,5 +1,6 @@
 #include "face.h"
 
+#include <esp_heap_caps.h>
 #include <string.h>
 
 #include "config.h"
@@ -59,9 +60,14 @@ void Face::begin() {
       canvas_.createSprite(M5.Display.width(), M5.Display.height()) != nullptr;
 
   if (use_sprite_) {
-    Serial.printf("[face] スプライト %dx%d (%u KB, PSRAM)\n",
+    // PSRAM が無ければ LovyanGFX は黙って内蔵 RAM に落とす。どちらに載ったかで
+    // 転送の速さも空き RAM も変わるので、決め打ちで PSRAM と書かない。
+    // **psramFound() は当てにならない**（初期化に失敗していても true を返す）
+    Serial.printf("[face] スプライト %dx%d (%u KB, %s)\n",
                   M5.Display.width(), M5.Display.height(),
-                  (unsigned)(M5.Display.width() * M5.Display.height() * 2 / 1024));
+                  (unsigned)(M5.Display.width() * M5.Display.height() * 2 / 1024),
+                  heap_caps_get_free_size(MALLOC_CAP_SPIRAM) > 0 ? "PSRAM"
+                                                                 : "内蔵RAM");
   } else {
     Serial.println("[face] スプライトを確保できません。画面へ直接描きます（ちらつきます）");
   }
@@ -267,7 +273,7 @@ void Face::render(LovyanGFX& g) {
     if (!connected_) {
       g.setTextSize(1);
       g.setTextDatum(textdatum_t::top_left);
-      g.setTextColor(g.color565(230, 140, 90));
+      g.setTextColor(g.color565(120, 130, 140));
       g.drawString("U-cyber space not connected", 6, 6);
     }
     return;

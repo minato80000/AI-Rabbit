@@ -9,6 +9,7 @@
 // 切り替えは mic_in が持つ。docs/core-mic.md を参照。
 
 #include <M5Unified.h>
+#include <esp_heap_caps.h>
 
 #include "audio_out.h"
 #include "config.h"
@@ -43,6 +44,23 @@ void setup()
   delay(200);
   Serial.println();
   Serial.printf("=== ウサちゃんロボ CoreS3 fw %s ===\n", FW_VERSION);
+
+  // PSRAM が見えていないと、顔のスプライト 150KB と音声リングバッファ 48KB が
+  // 内蔵 RAM (320KB) から取られる。WiFi に回る分が減るので、この状態で音や
+  // 通信を評価すると判断を誤る。
+  //
+  // **書き込み直後は必ずこうなる。** esptool は RTS でリセットするだけで電源を
+  // 落とさず、ESP32-S3 の OPI PSRAM は電源が切れないリセットだとブートローダの
+  // ID 読みに応答しないことがある（コールドブートなら出ない）
+  // **psramFound() は使わない。** 初期化に失敗していても true を返すことが
+  // あり、実測でそうなった（face は PSRAM、audio は内蔵RAM と、同じ起動で
+  // 食い違って出た）。実際に確保できる領域があるかを見る
+  if (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) == 0)
+  {
+    Serial.println("[main] PSRAM が見えていません。電源を入れ直してください");
+    Serial.println("[main] 書き込み直後のリセットではよく起きます。"
+                   "この状態の音や通信は当てになりません");
+  }
 
   face.begin();
   if (!audio_out.begin())

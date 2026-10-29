@@ -14,7 +14,10 @@ bool AudioOut::begin() {
 
   // 内蔵 RAM は画面や WiFi に使いたいので、まず PSRAM を試す
   buf_ = (int16_t*)heap_caps_malloc(capacity_ * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+  const bool in_psram = (buf_ != nullptr);
   if (buf_ == nullptr) {
+    // PSRAM が見えないときはここに落ちる。鳴ることは鳴るが、内蔵 RAM を
+    // 48KB 食うので WiFi に回る分が減る（main.cpp が起動時に警告を出す）
     buf_ = (int16_t*)malloc(capacity_ * sizeof(int16_t));
   }
   if (buf_ == nullptr) {
@@ -39,8 +42,9 @@ bool AudioOut::begin() {
   // （unsigned の引き算なので millis() が小さいうちでも正しく回る）
   drained_at_ms_ = millis() - SPEAKER_DRAIN_MS;
 
-  Serial.printf("[audio] リングバッファ %u サンプル (%u ms) / DMA の吐き切り %u ms\n",
+  Serial.printf("[audio] リングバッファ %u サンプル (%u ms, %s) / DMA の吐き切り %u ms\n",
                 (unsigned)capacity_, (unsigned)RINGBUFFER_MS,
+                in_psram ? "PSRAM" : "内蔵RAM",
                 (unsigned)SPEAKER_DRAIN_MS);
   return true;
 }
