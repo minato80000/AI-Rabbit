@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="ウサちゃん">
-<title>ウサちゃんの会話</title>
+<title>ウサちゃんロボとの会話</title>
 <style>
   :root {
     --bg: #fbf7f4;
@@ -52,7 +52,6 @@
     padding: calc(env(safe-area-inset-top) + 12px) 20px 12px;
     border-bottom: 1px solid var(--you-border);
   }
-  #face { font-size: 34px; line-height: 1; min-width: 3.4em; text-align: center; }
   #status { font-size: 20px; font-weight: 600; flex: 1; }
   #conn { font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   #conn::before {
@@ -100,25 +99,22 @@
 </head>
 <body>
 <header>
-  <div id="face">( ･ω･)</div>
   <div id="status">接続しています…</div>
   <button id="toggle" type="button">聞き流した言葉: 表示</button>
   <div id="conn">未接続</div>
 </header>
 <main id="log">
-  <div id="empty">「ウサちゃん」と話しかけてみてください<br>聞き取った言葉と返事がここに出ます</div>
+  <div id="empty">「ウサちゃんロボ」と話しかけてみてください<br>聞き取った言葉と返事がここに出ます</div>
 </main>
 <script>
 (() => {
   "use strict";
   const log = document.getElementById("log");
-  const face = document.getElementById("face");
   const statusEl = document.getElementById("status");
   const conn = document.getElementById("conn");
   const toggle = document.getElementById("toggle");
   const MAX_ROWS = 200;
 
-  const FACES = { neutral: "( ･ω･)", happy: "( ^ω^ )", puzzled: "( ･ω･)？", surprised: "( ﾟωﾟ)!" };
   const STATES = { idle: "待っています", listening: "聞いています", thinking: "考えています", speaking: "お話ししています" };
 
   // 聞き流した言葉の表示は端末ごとに覚える（保存できない環境でも動くように）
@@ -184,7 +180,6 @@
         endReply();
         break;
       case "state":
-        face.textContent = FACES[m.emotion] || FACES.neutral;
         statusEl.textContent = STATES[m.v] || m.v;
         break;
     }
